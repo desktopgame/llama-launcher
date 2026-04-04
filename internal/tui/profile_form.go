@@ -14,42 +14,19 @@ import (
 	"github.com/desktopgame/llama-launcher/internal/runtime"
 )
 
-// profile creation steps
-type profileStep int
-
-const (
-	stepSelectModel profileStep = iota
-	stepSelectRuntime
-	stepSelectMMProj
-	stepEditParams
-)
-
 type profileFormState struct {
-	step    profileStep
+	form    *huh.Form
 	editing *profile.Profile
 
-	// step 1: model selection
-	modelList     list.Model
-	models        []model.LocalModel
-	selectedModel *model.LocalModel
-
-	// step 2: runtime selection
-	runtimeList     list.Model
-	runtimes        []runtime.InstalledRuntime
-	selectedRuntime *runtime.InstalledRuntime
-
-	// step 3: mmproj selection
-	mmprojList     list.Model
-	mmprojs        []string
-	selectedMMProj string
-
-	// step 4: huh form for parameters
-	form        *huh.Form
+	// bound values
 	profileName string
+	modelPath   string
+	runtimeDir  string
 	contextSize string
 	gpuLayers   string
 	flashAttn   bool
 	noMmap      bool
+	mmprojPath  string
 	extraArgs   string
 }
 
@@ -73,66 +50,26 @@ type profileSavedMsg struct {
 	err  error
 }
 
-// --- init form ---
+// --- build form ---
 
 func newProfileFormState(
 	editing *profile.Profile,
 	models []model.LocalModel,
 	runtimes []runtime.InstalledRuntime,
 	mmprojs []string,
-	width, height int,
+	width int,
 ) profileFormState {
 	if width <= 0 {
 		width = 80
 	}
-	if height <= 0 {
-		height = 20
-	}
-	listH := height - 4
 
-	pf := profileFormState{
-		step:     stepSelectModel,
-		editing:  editing,
-		models:   models,
-		runtimes: runtimes,
-		mmprojs:  mmprojs,
-	}
-
-	// model list
-	modelItems := make([]list.Item, len(models))
-	for i, lm := range models {
-		label := lm.Filename
-		if lm.Source == model.SourceLMStudio {
-			label = fmt.Sprintf("%s (%s/%s)", lm.Filename, lm.Publisher, lm.ModelName)
-		}
-		sizeGB := float64(lm.Size) / (1024 * 1024 * 1024)
-		modelItems[i] = menuItem{title: label, desc: fmt.Sprintf("%.1f GB — %s", sizeGB, lm.Dir)}
-	}
-	pf.modelList = list.New(modelItems, list.NewDefaultDelegate(), width, listH)
-	pf.modelList.Title = "Select Model"
-
-	// runtime list
-	rtItems := make([]list.Item, len(runtimes))
-	for i, rt := range runtimes {
-		rtItems[i] = menuItem{
-			title: rt.DirName,
-			desc:  fmt.Sprintf("%s [%s]", rt.Tag, rt.Backend),
-		}
-	}
-	pf.runtimeList = list.New(rtItems, list.NewDefaultDelegate(), width, listH)
-	pf.runtimeList.Title = "Select Runtime"
-
-	// mmproj list
-	mmprojItems := []list.Item{menuItem{title: "(none)", desc: "No multimodal projector"}}
-	for _, mp := range mmprojs {
-		mmprojItems = append(mmprojItems, menuItem{title: filepath.Base(mp), desc: mp})
-	}
-	pf.mmprojList = list.New(mmprojItems, list.NewDefaultDelegate(), width, listH)
-	pf.mmprojList.Title = "Select mmproj (for vision models)"
+	pf := profileFormState{editing: editing}
 
 	// pre-fill if editing
 	if editing != nil {
 		pf.profileName = editing.Name
+		pf.modelPath = editing.ModelPath
+		pf.runtimeDir = editing.RuntimeDirName
 		if editing.ContextSize > 0 {
 			pf.contextSize = strconv.Itoa(editing.ContextSize)
 		}
@@ -141,15 +78,31 @@ func newProfileFormState(
 		}
 		pf.flashAttn = editing.FlashAttention
 		pf.noMmap = editing.NoMmap
+		pf.mmprojPath = editing.MMProjPath
 		pf.extraArgs = editing.ExtraArgs
 	}
 
-	return pf
-}
+	// model options
+	modelOptions := make([]huh.Option[string], 0, len(models))
+	for _, lm := range models {
+		label := lm.Filename
+		if lm.Source == model.SourceLMStudio {
+			label = fmt.Sprintf("%s (%s/%s)", lm.Filename, lm.Publisher, lm.ModelName)
+		}
+		modelOptions = append(modelOptions, huh.NewOption(label, lm.Path))
+	}
 
-func (pf *profileFormState) buildHuhForm(width int) {
-	if width <= 0 {
-		width = 80
+	// runtime options
+	runtimeOptions := make([]huh.Option[string], 0, len(runtimes))
+	for _, rt := range runtimes {
+		label := fmt.Sprintf("%s [%s]", rt.Tag, rt.Backend)
+		runtimeOptions = append(runtimeOptions, huh.NewOption(label, rt.DirName))
+	}
+
+	// mmproj options
+	mmprojOptions := []huh.Option[string]{huh.NewOption("(none)", "")}
+	for _, mp := range mmprojs {
+		mmprojOptions = append(mmprojOptions, huh.NewOption(filepath.Base(mp), mp))
 	}
 
 	numValidator := func(s string) error {
@@ -173,6 +126,16 @@ func (pf *profileFormState) buildHuhForm(width int) {
 					}
 					return nil
 				}),
+			huh.NewSelect[string]().
+				Title("Model").
+				Options(modelOptions...).
+				Value(&pf.modelPath),
+			huh.NewSelect[string]().
+				Title("Runtime").
+				Options(runtimeOptions...).
+				Value(&pf.runtimeDir),
+		),
+		huh.NewGroup(
 			huh.NewInput().
 				Title("Context Size (empty = default)").
 				Value(&pf.contextSize).
@@ -187,133 +150,41 @@ func (pf *profileFormState) buildHuhForm(width int) {
 			huh.NewConfirm().
 				Title("Disable mmap").
 				Value(&pf.noMmap),
+		),
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("mmproj (for vision models)").
+				Options(mmprojOptions...).
+				Value(&pf.mmprojPath),
 			huh.NewText().
 				Title("Extra Args (free-form llama-server options)").
 				Value(&pf.extraArgs),
 		),
 	).WithWidth(width).WithShowHelp(true)
+
+	return pf
 }
 
 func (pf *profileFormState) toProfile() *profile.Profile {
 	ctxSize, _ := strconv.Atoi(pf.contextSize)
 	gpuLayers, _ := strconv.Atoi(pf.gpuLayers)
 
-	p := &profile.Profile{
+	return &profile.Profile{
 		Name:           strings.TrimSpace(pf.profileName),
+		ModelPath:      pf.modelPath,
+		RuntimeDirName: pf.runtimeDir,
 		ContextSize:    ctxSize,
 		GPULayers:      gpuLayers,
 		FlashAttention: pf.flashAttn,
 		NoMmap:         pf.noMmap,
+		MMProjPath:     pf.mmprojPath,
 		ExtraArgs:      pf.extraArgs,
-		MMProjPath:     pf.selectedMMProj,
 	}
-	if pf.selectedModel != nil {
-		p.ModelPath = pf.selectedModel.Path
-	}
-	if pf.selectedRuntime != nil {
-		p.RuntimeDirName = pf.selectedRuntime.DirName
-	}
-	return p
 }
 
 // --- Update ---
 
 func (m Model) updateProfileForm(msg tea.Msg) (tea.Model, tea.Cmd) {
-	pf := &m.profileForm
-
-	switch pf.step {
-	case stepSelectModel:
-		return m.updateProfileSelectModel(msg)
-	case stepSelectRuntime:
-		return m.updateProfileSelectRuntime(msg)
-	case stepSelectMMProj:
-		return m.updateProfileSelectMMProj(msg)
-	case stepEditParams:
-		return m.updateProfileEditParams(msg)
-	}
-	return m, nil
-}
-
-func (m Model) updateProfileSelectModel(msg tea.Msg) (tea.Model, tea.Cmd) {
-	pf := &m.profileForm
-
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		switch keyMsg.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-		case "q", "esc":
-			m.current = viewProfiles
-			return m, nil
-		case "enter":
-			idx := pf.modelList.Index()
-			if idx >= 0 && idx < len(pf.models) {
-				pf.selectedModel = &pf.models[idx]
-				pf.step = stepSelectRuntime
-			}
-			return m, nil
-		}
-	}
-
-	var cmd tea.Cmd
-	pf.modelList, cmd = pf.modelList.Update(msg)
-	return m, cmd
-}
-
-func (m Model) updateProfileSelectRuntime(msg tea.Msg) (tea.Model, tea.Cmd) {
-	pf := &m.profileForm
-
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		switch keyMsg.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-		case "q", "esc":
-			pf.step = stepSelectModel
-			return m, nil
-		case "enter":
-			idx := pf.runtimeList.Index()
-			if idx >= 0 && idx < len(pf.runtimes) {
-				pf.selectedRuntime = &pf.runtimes[idx]
-				pf.step = stepSelectMMProj
-			}
-			return m, nil
-		}
-	}
-
-	var cmd tea.Cmd
-	pf.runtimeList, cmd = pf.runtimeList.Update(msg)
-	return m, cmd
-}
-
-func (m Model) updateProfileSelectMMProj(msg tea.Msg) (tea.Model, tea.Cmd) {
-	pf := &m.profileForm
-
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		switch keyMsg.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-		case "q", "esc":
-			pf.step = stepSelectRuntime
-			return m, nil
-		case "enter":
-			idx := pf.mmprojList.Index()
-			if idx == 0 {
-				pf.selectedMMProj = ""
-			} else if idx > 0 && idx <= len(pf.mmprojs) {
-				pf.selectedMMProj = pf.mmprojs[idx-1]
-			}
-			// build huh form and transition
-			pf.buildHuhForm(m.width)
-			pf.step = stepEditParams
-			return m, pf.form.Init()
-		}
-	}
-
-	var cmd tea.Cmd
-	pf.mmprojList, cmd = pf.mmprojList.Update(msg)
-	return m, cmd
-}
-
-func (m Model) updateProfileEditParams(msg tea.Msg) (tea.Model, tea.Cmd) {
 	pf := &m.profileForm
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
@@ -322,17 +193,12 @@ func (m Model) updateProfileEditParams(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// delegate to huh form
 	formModel, cmd := pf.form.Update(msg)
 	if f, ok := formModel.(*huh.Form); ok {
 		pf.form = f
 
 		if f.State == huh.StateCompleted {
 			p := pf.toProfile()
-			if p.Name == "" {
-				m.status = "Profile name is required"
-				return m, nil
-			}
 			mgr := m.profManager
 			return m, func() tea.Msg {
 				err := mgr.Save(p)
@@ -340,7 +206,7 @@ func (m Model) updateProfileEditParams(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if f.State == huh.StateAborted {
-			pf.step = stepSelectMMProj
+			m.current = viewMenu
 			return m, nil
 		}
 	}
@@ -352,18 +218,8 @@ func (m Model) updateProfileEditParams(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) viewProfileForm() string {
 	pf := &m.profileForm
-
-	switch pf.step {
-	case stepSelectModel:
-		return pf.modelList.View()
-	case stepSelectRuntime:
-		return pf.runtimeList.View()
-	case stepSelectMMProj:
-		return pf.mmprojList.View()
-	case stepEditParams:
-		if pf.form != nil {
-			return pf.form.View()
-		}
+	if pf.form != nil {
+		return pf.form.View()
 	}
 	return ""
 }
@@ -459,9 +315,9 @@ func (m Model) handleProfileFormDataMsg(msg profileFormDataMsg) (tea.Model, tea.
 		return m, nil
 	}
 
-	m.profileForm = newProfileFormState(msg.editing, msg.models, msg.runtimes, msg.mmprojs, m.width, m.height)
+	m.profileForm = newProfileFormState(msg.editing, msg.models, msg.runtimes, msg.mmprojs, m.width)
 	m.current = viewProfileForm
-	return m, nil
+	return m, m.profileForm.form.Init()
 }
 
 // --- Commands ---
