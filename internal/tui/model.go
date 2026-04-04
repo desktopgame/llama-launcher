@@ -45,6 +45,11 @@ func (i menuItem) Title() string       { return i.title }
 func (i menuItem) Description() string { return i.desc }
 func (i menuItem) FilterValue() string { return i.title }
 
+type localTab struct {
+	label string
+	list  list.Model
+}
+
 type Model struct {
 	cfg          *config.Config
 	cfgPath      string
@@ -70,8 +75,9 @@ type Model struct {
 	// model: gguf file selection
 	modelFiles      list.Model
 	fetchedFiles    []model.GGUFFile
-	// model: local models
-	localModels     list.Model
+	// model: local models (tabbed by source)
+	localTabs       []localTab // one per source
+	localTabIdx     int        // active tab index
 	// ui
 	spinner spinner.Model
 	status  string
@@ -172,6 +178,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleBack()
 		case "enter":
 			return m.handleEnter()
+		case "left":
+			if m.current == viewLocalModels && len(m.localTabs) > 0 {
+				m.localTabIdx = (m.localTabIdx - 1 + len(m.localTabs)) % len(m.localTabs)
+				return m, nil
+			}
+		case "right":
+			if m.current == viewLocalModels && len(m.localTabs) > 0 {
+				m.localTabIdx = (m.localTabIdx + 1) % len(m.localTabs)
+				return m, nil
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -232,7 +248,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewModelFiles:
 		m.modelFiles, cmd = m.modelFiles.Update(msg)
 	case viewLocalModels:
-		m.localModels, cmd = m.localModels.Update(msg)
+		if len(m.localTabs) > 0 {
+			m.localTabs[m.localTabIdx].list, cmd = m.localTabs[m.localTabIdx].list.Update(msg)
+		}
 	}
 	return m, cmd
 }
@@ -445,6 +463,7 @@ func (m Model) handleLocalModelEnter() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+
 type openFolderMsg struct{ err error }
 
 func (m Model) handleSettingsEnter() (tea.Model, tea.Cmd) {
@@ -577,22 +596,46 @@ func (m Model) handleLocalModelsMsg(msg localModelsMsg) (tea.Model, tea.Cmd) {
 		m.current = viewMenu
 		return m, nil
 	}
-	items := make([]list.Item, len(msg.models))
-	for i, lm := range msg.models {
-		sizeGB := float64(lm.Size) / (1024 * 1024 * 1024)
-		var desc string
+
+	// group models by source directory
+	groups := make(map[string][]model.LocalModel)
+	var order []string
+	for _, lm := range msg.models {
+		var key string
 		if lm.Source == model.SourceLMStudio {
-			desc = fmt.Sprintf("%.1f GB — [lmstudio] %s/%s", sizeGB, lm.Publisher, lm.ModelName)
+			key = "LM Studio"
 		} else {
-			desc = fmt.Sprintf("%.1f GB — %s", sizeGB, lm.Dir)
+			key = lm.Dir
 		}
-		items[i] = menuItem{
-			title: lm.Filename,
-			desc:  desc,
+		if _, exists := groups[key]; !exists {
+			order = append(order, key)
 		}
+		groups[key] = append(groups[key], lm)
 	}
-	m.localModels = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
-	m.localModels.Title = "Local Models (q to back)"
+
+	m.localTabs = nil
+	for _, key := range order {
+		models := groups[key]
+		items := make([]list.Item, len(models))
+		for i, lm := range models {
+			sizeGB := float64(lm.Size) / (1024 * 1024 * 1024)
+			var desc string
+			if lm.Source == model.SourceLMStudio {
+				desc = fmt.Sprintf("%.1f GB — %s/%s", sizeGB, lm.Publisher, lm.ModelName)
+			} else {
+				desc = fmt.Sprintf("%.1f GB", sizeGB)
+			}
+			items[i] = menuItem{
+				title: lm.Filename,
+				desc:  desc,
+			}
+		}
+		l := list.New(items, list.NewDefaultDelegate(), m.width, m.height-4)
+		l.SetShowTitle(false)
+		l.SetShowStatusBar(false)
+		m.localTabs = append(m.localTabs, localTab{label: key, list: l})
+	}
+	m.localTabIdx = 0
 	m.current = viewLocalModels
 	return m, nil
 }
@@ -618,7 +661,7 @@ func (m Model) View() string {
 	case viewModelFiles:
 		b.WriteString(m.modelFiles.View())
 	case viewLocalModels:
-		b.WriteString(m.localModels.View())
+		b.WriteString(m.viewLocalModels())
 	case viewSettings:
 		b.WriteString(m.viewSettings())
 	case viewLoading:
@@ -630,6 +673,33 @@ func (m Model) View() string {
 		b.WriteString("\n" + style.Render(m.status))
 	}
 
+	return b.String()
+}
+
+func (m Model) viewLocalModels() string {
+	if len(m.localTabs) == 0 {
+		return "\n  No models found\n"
+	}
+
+	var b strings.Builder
+	activeStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).Padding(0, 2)
+	inactiveStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Padding(0, 2)
+
+	b.WriteString("\n ")
+	for i, tab := range m.localTabs {
+		if i == m.localTabIdx {
+			b.WriteString(activeStyle.Render("[ " + tab.label + " ]"))
+		} else {
+			b.WriteString(inactiveStyle.Render("  " + tab.label + "  "))
+		}
+	}
+	b.WriteString("\n")
+
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginLeft(2)
+	b.WriteString(hintStyle.Render("← → switch tab  |  q back"))
+	b.WriteString("\n")
+
+	b.WriteString(m.localTabs[m.localTabIdx].list.View())
 	return b.String()
 }
 
