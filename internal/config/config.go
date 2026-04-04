@@ -1,0 +1,57 @@
+package config
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+)
+
+// Config holds the application settings.
+type Config struct {
+	ModelDir        string `json:"model_dir"`        // user-defined model storage directory
+	RuntimeDir      string `json:"runtime_dir"`      // where llama.cpp runtimes are stored
+	DefaultBackend  string `json:"default_backend"`  // preferred backend: vulkan, cuda, rocm, cpu
+}
+
+// DefaultPath returns the default config file path.
+func DefaultPath() string {
+	dir, _ := os.UserConfigDir()
+	return filepath.Join(dir, "llama-launcher", "config.json")
+}
+
+// Load reads config from path. Returns defaults if file doesn't exist.
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return defaults(), nil
+		}
+		return nil, err
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// Save writes config to path.
+func Save(path string, cfg *Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func defaults() *Config {
+	dir, _ := os.UserConfigDir()
+	return &Config{
+		RuntimeDir:     filepath.Join(dir, "llama-launcher", "runtimes"),
+		DefaultBackend: "vulkan",
+	}
+}
