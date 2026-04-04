@@ -107,7 +107,7 @@ type Model struct {
 	height      int
 }
 
-func NewModel() Model {
+func NewModel(swapProc *swap.Process) Model {
 	cfgPath := config.DefaultPath()
 	cfg, _ := config.Load(cfgPath)
 	rtMgr := runtime.NewManager(cfg.RuntimeDir)
@@ -149,7 +149,7 @@ func NewModel() Model {
 		spinner:      s,
 		profManager:  profMgr,
 		wsMgr:        wsMgr,
-		swapProc:     &swap.Process{},
+		swapProc:     swapProc,
 	}
 }
 

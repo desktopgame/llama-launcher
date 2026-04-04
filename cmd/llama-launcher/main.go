@@ -21,10 +21,16 @@ func main() {
 		return
 	}
 
-	p := tea.NewProgram(tui.NewModel(), tea.WithAltScreen())
+	proc := &swap.Process{}
+	p := tea.NewProgram(tui.NewModel(proc), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+
+	// clean up llama-swap if still running when TUI exits
+	if proc.IsRunning() {
+		proc.Stop()
 	}
 }
 
