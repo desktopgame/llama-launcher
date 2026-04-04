@@ -16,6 +16,7 @@ import (
 	"github.com/desktopgame/llama-launcher/internal/model"
 	"github.com/desktopgame/llama-launcher/internal/profile"
 	"github.com/desktopgame/llama-launcher/internal/runtime"
+	"github.com/desktopgame/llama-launcher/internal/swap"
 	"github.com/desktopgame/llama-launcher/internal/workspace"
 )
 
@@ -92,10 +93,12 @@ type Model struct {
 	fetchedProfiles []*profile.Profile
 	profileForm     profileFormState
 	// workspace
-	wsMgr              *workspace.Manager
-	workspaceList      list.Model
-	fetchedWorkspaces  []*workspace.Workspace
-	wsForm             wsFormState
+	wsMgr             *workspace.Manager
+	workspaceList     list.Model
+	fetchedWorkspaces []*workspace.Workspace
+	wsForm            wsFormState
+	// swap process
+	swapProc *swap.Process
 	// ui
 	spinner     spinner.Model
 	status      string
@@ -146,6 +149,7 @@ func NewModel() Model {
 		spinner:      s,
 		profManager:  profMgr,
 		wsMgr:        wsMgr,
+		swapProc:     &swap.Process{},
 	}
 }
 
@@ -226,6 +230,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.current == viewWorkspaces {
 				return m.handleWsDelete()
 			}
+		case "s":
+			if m.current == viewWorkspaces {
+				return m.handleWsStart()
+			}
+		case "x":
+			if m.current == viewWorkspaces {
+				return m.handleWsStop()
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -250,6 +262,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleProfilesMsg(msg)
 	case profileFormDataMsg:
 		return m.handleProfileFormDataMsg(msg)
+	// swap process messages
+	case swapStartedMsg:
+		if msg.err != nil {
+			m.statusError = true
+			m.status = fmt.Sprintf("Failed to start: %v", msg.err)
+		} else {
+			m.status = fmt.Sprintf("llama-swap started with \"%s\" on port %d", msg.wsName, m.cfg.Port)
+		}
+		m.current = viewMenu
+		return m, nil
+	case swapStoppedMsg:
+		if msg.err != nil {
+			m.statusError = true
+			m.status = fmt.Sprintf("Failed to stop: %v", msg.err)
+		} else {
+			m.status = "llama-swap stopped"
+		}
+		m.current = viewMenu
+		return m, nil
+
 	// workspace messages
 	case workspacesMsg:
 		return m.handleWorkspacesMsg(msg)
@@ -756,7 +788,12 @@ func (m Model) View() string {
 	case viewLocalModels:
 		b.WriteString(m.viewLocalModels())
 	case viewProfiles:
-		b.WriteString(m.profileList.View())
+		detail := m.viewProfileDetail()
+		if detail != "" {
+			b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, m.profileList.View(), detail))
+		} else {
+			b.WriteString(m.profileList.View())
+		}
 	case viewProfileForm:
 		b.WriteString(m.viewProfileForm())
 	case viewWorkspaces:

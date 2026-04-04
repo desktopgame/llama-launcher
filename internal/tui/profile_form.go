@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/desktopgame/llama-launcher/internal/model"
 	"github.com/desktopgame/llama-launcher/internal/profile"
 	"github.com/desktopgame/llama-launcher/internal/runtime"
@@ -270,6 +271,63 @@ func (m Model) viewProfileForm() string {
 	return ""
 }
 
+func (m Model) viewProfileDetail() string {
+	idx := m.profileList.Index()
+	// first item is "+ New Profile"
+	profIdx := idx - 1
+	if profIdx < 0 || profIdx >= len(m.fetchedProfiles) {
+		return ""
+	}
+	p := m.fetchedProfiles[profIdx]
+
+	panelW := m.width/2 - 2
+	if panelW <= 0 {
+		panelW = 38
+	}
+
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	valueStyle := lipgloss.NewStyle().Bold(true)
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("241")).
+		Padding(1, 2).
+		Width(panelW)
+
+	var b strings.Builder
+	line := func(label, value string) {
+		b.WriteString(labelStyle.Render(label+":") + " " + valueStyle.Render(value) + "\n")
+	}
+
+	line("Name", p.Name)
+	line("Type", string(p.ModelType))
+	line("Model", filepath.Base(p.ModelPath))
+	line("Runtime", p.RuntimeDirName)
+	if p.ContextSize > 0 {
+		line("Context", strconv.Itoa(p.ContextSize))
+	}
+	if p.GPULayers > 0 {
+		line("GPU Layers", strconv.Itoa(p.GPULayers))
+	}
+	if p.ModelType != profile.ModelTypeEmbedding {
+		if p.FlashAttention {
+			line("Flash Attn", "yes")
+		} else {
+			line("Flash Attn", "no")
+		}
+	}
+	if p.NoMmap {
+		line("mmap", "disabled")
+	}
+	if p.MMProjPath != "" {
+		line("mmproj", filepath.Base(p.MMProjPath))
+	}
+	if p.ExtraArgs != "" {
+		line("Extra Args", p.ExtraArgs)
+	}
+
+	return borderStyle.Render(b.String())
+}
+
 // --- Profile list handlers ---
 
 func (m Model) handleProfilesMsg(msg profilesMsg) (tea.Model, tea.Cmd) {
@@ -299,8 +357,9 @@ func (m Model) handleProfilesMsg(msg profilesMsg) (tea.Model, tea.Cmd) {
 	if h <= 0 {
 		h = 20
 	}
-	m.profileList = list.New(items, list.NewDefaultDelegate(), w, h)
-	m.profileList.Title = "Profiles (enter to edit, d to delete, q to back)"
+	listW := w / 2
+	m.profileList = list.New(items, list.NewDefaultDelegate(), listW, h)
+	m.profileList.Title = "Profiles (enter/d/q)"
 	m.current = viewProfiles
 	return m, nil
 }

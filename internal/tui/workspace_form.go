@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/huh"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/desktopgame/llama-launcher/internal/profile"
+	"github.com/desktopgame/llama-launcher/internal/swap"
 	"github.com/desktopgame/llama-launcher/internal/workspace"
 )
 
@@ -382,7 +383,7 @@ func (m Model) handleWorkspacesMsg(msg workspacesMsg) (tea.Model, tea.Cmd) {
 		h = 20
 	}
 	m.workspaceList = list.New(items, list.NewDefaultDelegate(), w, h)
-	m.workspaceList.Title = "Workspaces (enter to edit, d to delete, q to back)"
+	m.workspaceList.Title = "Workspaces (s start, x stop, enter edit, d del, q back)"
 	m.current = viewWorkspaces
 	return m, nil
 }
@@ -445,6 +446,79 @@ func (m Model) handleWsDelete() (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Removed workspace \"%s\"", i.title)
 	}
 	return m, listWorkspacesCmd(m.wsMgr)
+}
+
+// --- Launch handlers ---
+
+type swapStartedMsg struct {
+	wsName string
+	err    error
+}
+
+type swapStoppedMsg struct {
+	err error
+}
+
+func (m Model) handleWsStart() (tea.Model, tea.Cmd) {
+	i, ok := m.workspaceList.SelectedItem().(menuItem)
+	if !ok || i.title == "+ New Workspace" {
+		return m, nil
+	}
+
+	if m.swapProc.IsRunning() {
+		m.statusError = true
+		m.status = "llama-swap is already running. Stop it first."
+		return m, nil
+	}
+
+	var ws *workspace.Workspace
+	for _, w := range m.fetchedWorkspaces {
+		if w.Name == i.title {
+			ws = w
+			break
+		}
+	}
+	if ws == nil {
+		return m, nil
+	}
+
+	profMgr := m.profManager
+	rtMgr := m.rtManager
+	port := m.cfg.Port
+	proc := m.swapProc
+	m.current = viewLoading
+	m.status = fmt.Sprintf("Starting llama-swap with \"%s\"...", ws.Name)
+
+	return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
+		if err := swap.CheckInstalled(); err != nil {
+			return swapStartedMsg{err: err}
+		}
+
+		configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, port)
+		if err != nil {
+			return swapStartedMsg{err: err}
+		}
+
+		if err := proc.Start(configPath, port); err != nil {
+			return swapStartedMsg{err: err}
+		}
+
+		return swapStartedMsg{wsName: ws.Name}
+	})
+}
+
+func (m Model) handleWsStop() (tea.Model, tea.Cmd) {
+	if !m.swapProc.IsRunning() {
+		m.statusError = true
+		m.status = "llama-swap is not running"
+		return m, nil
+	}
+
+	proc := m.swapProc
+	return m, func() tea.Msg {
+		err := proc.Stop()
+		return swapStoppedMsg{err: err}
+	}
 }
 
 // --- Commands ---
