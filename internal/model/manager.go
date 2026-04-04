@@ -8,14 +8,16 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/desktopgame/llama-launcher/internal/util"
 )
 
 // Source indicates where a local model was found.
 type Source string
 
 const (
-	SourceUser     Source = "user"      // from model_dirs
-	SourceLMStudio Source = "lmstudio"  // from lmstudio_dir
+	SourceUser     Source = "user"     // from model_dirs
+	SourceLMStudio Source = "lmstudio" // from lmstudio_dir
 )
 
 // Manager handles local GGUF model files across multiple sources.
@@ -30,7 +32,7 @@ type LocalModel struct {
 	Path      string // full path
 	Dir       string // parent directory
 	Size      int64
-	Source    Source  // where it was found
+	Source    Source // where it was found
 	Publisher string // LM Studio only: e.g. "TheBloke"
 	ModelName string // LM Studio only: e.g. "Llama-2-7B-GGUF"
 }
@@ -48,33 +50,33 @@ func NewManager(dirs []string, lmStudioDir string) *Manager {
 	return &Manager{dirs: dirs, lmStudioDir: lmStudioDir}
 }
 
-// List returns all GGUF files found across all sources.
-func (m *Manager) List() ([]LocalModel, error) {
-	var models []LocalModel
-
-	// scan user directories (recursive)
+// ListAll returns all GGUF models and mmproj file paths in a single scan.
+func (m *Manager) ListAll() (models []LocalModel, mmprojs []string, err error) {
 	for _, dir := range m.dirs {
-		found, err := scanRecursive(dir, SourceUser)
-		if err != nil {
-			return nil, err
+		found, e := scanRecursive(dir, SourceUser, &mmprojs)
+		if e != nil {
+			return nil, nil, e
 		}
 		models = append(models, found...)
 	}
-
-	// scan LM Studio directory
 	if m.lmStudioDir != "" {
-		found, err := scanLMStudio(m.lmStudioDir)
-		if err != nil {
-			return nil, err
+		found, e := scanLMStudio(m.lmStudioDir, &mmprojs)
+		if e != nil {
+			return nil, nil, e
 		}
 		models = append(models, found...)
 	}
-
-	return models, nil
+	return models, mmprojs, nil
 }
 
-// scanRecursive walks a directory tree and returns all GGUF files.
-func scanRecursive(root string, source Source) ([]LocalModel, error) {
+// List returns all GGUF files found across all sources.
+func (m *Manager) List() ([]LocalModel, error) {
+	models, _, err := m.ListAll()
+	return models, err
+}
+
+// scanRecursive walks a directory tree and collects GGUF models and mmproj files.
+func scanRecursive(root string, source Source, mmprojs *[]string) ([]LocalModel, error) {
 	var models []LocalModel
 
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -92,6 +94,9 @@ func scanRecursive(root string, source Source) ([]LocalModel, error) {
 			return nil
 		}
 		if isAuxiliaryGGUF(lower) {
+			if mmprojs != nil {
+				*mmprojs = append(*mmprojs, path)
+			}
 			return nil
 		}
 		info, err := d.Info()
@@ -116,7 +121,7 @@ func scanRecursive(root string, source Source) ([]LocalModel, error) {
 
 // scanLMStudio scans the LM Studio models directory.
 // Expected layout: {lmStudioDir}/{publisher}/{model-name}/*.gguf
-func scanLMStudio(root string) ([]LocalModel, error) {
+func scanLMStudio(root string, mmprojs *[]string) ([]LocalModel, error) {
 	var models []LocalModel
 
 	publishers, err := os.ReadDir(root)
@@ -154,6 +159,9 @@ func scanLMStudio(root string) ([]LocalModel, error) {
 					continue
 				}
 				if isAuxiliaryGGUF(lower) {
+					if mmprojs != nil {
+						*mmprojs = append(*mmprojs, filepath.Join(modelDir, f.Name()))
+					}
 					continue
 				}
 				info, err := f.Info()
@@ -178,25 +186,7 @@ func scanLMStudio(root string) ([]LocalModel, error) {
 
 // ListMMProj returns paths of mmproj GGUF files across all sources.
 func (m *Manager) ListMMProj() []string {
-	var mmprojs []string
-	scan := func(root string) {
-		filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return nil
-			}
-			lower := strings.ToLower(d.Name())
-			if strings.HasSuffix(lower, ".gguf") && strings.Contains(lower, "mmproj") {
-				mmprojs = append(mmprojs, path)
-			}
-			return nil
-		})
-	}
-	for _, dir := range m.dirs {
-		scan(dir)
-	}
-	if m.lmStudioDir != "" {
-		scan(m.lmStudioDir)
-	}
+	_, mmprojs, _ := m.ListAll()
 	return mmprojs
 }
 
@@ -231,10 +221,10 @@ func (m *Manager) Download(file GGUFFile, destDir string, progress func(download
 
 	var reader io.Reader = resp.Body
 	if progress != nil {
-		reader = &progressReader{
-			reader:     resp.Body,
-			total:      resp.ContentLength,
-			onProgress: progress,
+		reader = &util.ProgressReader{
+			Reader:     resp.Body,
+			Total:      resp.ContentLength,
+			OnProgress: progress,
 		}
 	}
 
@@ -261,20 +251,4 @@ func (m *Manager) Remove(path string) error {
 // --mmproj and shouldn't appear in the primary model list.
 func isAuxiliaryGGUF(lowerName string) bool {
 	return strings.Contains(lowerName, "mmproj")
-}
-
-type progressReader struct {
-	reader     io.Reader
-	total      int64
-	downloaded int64
-	onProgress func(downloaded, total int64)
-}
-
-func (pr *progressReader) Read(p []byte) (int, error) {
-	n, err := pr.reader.Read(p)
-	pr.downloaded += int64(n)
-	if pr.onProgress != nil {
-		pr.onProgress(pr.downloaded, pr.total)
-	}
-	return n, err
 }

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/desktopgame/llama-launcher/internal/util"
 	"time"
 )
 
@@ -68,7 +70,7 @@ func (m *Manager) Download(tag, backend string, asset Asset, progress func(downl
 
 	var reader io.Reader = resp.Body
 	if progress != nil {
-		reader = &progressReader{reader: resp.Body, total: asset.Size, onProgress: progress}
+		reader = &util.ProgressReader{Reader: resp.Body, Total: asset.Size, OnProgress: progress}
 	}
 
 	if _, err := io.Copy(tmpFile, reader); err != nil {
@@ -124,11 +126,7 @@ func (m *Manager) List() ([]InstalledRuntime, error) {
 
 // Remove deletes an installed runtime by its directory name (e.g. "b5000-vulkan").
 func (m *Manager) Remove(dirName string) error {
-	dir := filepath.Join(m.baseDir, dirName)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("runtime %s not found", dirName)
-	}
-	return os.RemoveAll(dir)
+	return os.RemoveAll(filepath.Join(m.baseDir, dirName))
 }
 
 // ServerPath returns the path to llama-server executable for a given directory name.
@@ -157,21 +155,6 @@ func parseDirName(name string) (tag, backend string) {
 	return name, ""
 }
 
-type progressReader struct {
-	reader     io.Reader
-	total      int64
-	downloaded int64
-	onProgress func(downloaded, total int64)
-}
-
-func (pr *progressReader) Read(p []byte) (int, error) {
-	n, err := pr.reader.Read(p)
-	pr.downloaded += int64(n)
-	if pr.onProgress != nil {
-		pr.onProgress(pr.downloaded, pr.total)
-	}
-	return n, err
-}
 
 func extractZip(src, dest string) error {
 	r, err := zip.OpenReader(src)

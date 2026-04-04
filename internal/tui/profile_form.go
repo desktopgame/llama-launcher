@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/huh"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/desktopgame/llama-launcher/internal/model"
 	"github.com/desktopgame/llama-launcher/internal/profile"
 	"github.com/desktopgame/llama-launcher/internal/runtime"
@@ -245,6 +245,7 @@ func (m Model) viewProfileForm() string {
 
 func (m Model) handleProfilesMsg(msg profilesMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Error: %v", msg.err)
 		m.current = viewMenu
 		return m, nil
@@ -282,6 +283,7 @@ func (m Model) handleProfileDelete() (tea.Model, tea.Cmd) {
 	}
 
 	if err := m.profManager.Remove(i.title); err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Failed to remove: %v", err)
 	} else {
 		m.status = fmt.Sprintf("Removed profile \"%s\"", i.title)
@@ -312,7 +314,7 @@ func (m Model) handleProfilesEnter() (tea.Model, tea.Cmd) {
 	m.status = "Loading models and runtimes..."
 
 	return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-		models, err := modelMgr.List()
+		models, mmprojs, err := modelMgr.ListAll()
 		if err != nil {
 			return profileFormDataMsg{err: err}
 		}
@@ -320,7 +322,6 @@ func (m Model) handleProfilesEnter() (tea.Model, tea.Cmd) {
 		if err != nil {
 			return profileFormDataMsg{err: err}
 		}
-		mmprojs := modelMgr.ListMMProj()
 		return profileFormDataMsg{
 			editing:  editing,
 			models:   models,
@@ -332,6 +333,7 @@ func (m Model) handleProfilesEnter() (tea.Model, tea.Cmd) {
 
 func (m Model) handleProfileFormDataMsg(msg profileFormDataMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Error: %v", msg.err)
 		m.current = viewMenu
 		return m, nil

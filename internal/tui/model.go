@@ -74,24 +74,25 @@ type Model struct {
 	// model: search
 	searchInput textinput.Model
 	// model: search results
-	modelResults    list.Model
-	fetchedModels   []model.HFModel
+	modelResults  list.Model
+	fetchedModels []model.HFModel
 	// model: gguf file selection
-	modelFiles      list.Model
-	fetchedFiles    []model.GGUFFile
+	modelFiles   list.Model
+	fetchedFiles []model.GGUFFile
 	// model: local models (tabbed by source)
-	localTabs       []localTab // one per source
-	localTabIdx     int        // active tab index
+	localTabs   []localTab // one per source
+	localTabIdx int        // active tab index
 	// profile
 	profManager     *profile.Manager
 	profileList     list.Model
 	fetchedProfiles []*profile.Profile
 	profileForm     profileFormState
 	// ui
-	spinner spinner.Model
-	status  string
-	width   int
-	height  int
+	spinner     spinner.Model
+	status      string
+	statusError bool
+	width       int
+	height      int
 }
 
 func NewModel() Model {
@@ -233,6 +234,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleProfileFormDataMsg(msg)
 	case profileSavedMsg:
 		if msg.err != nil {
+			m.statusError = true
 			m.status = fmt.Sprintf("Failed to save: %v", msg.err)
 		} else {
 			m.status = fmt.Sprintf("Saved profile \"%s\"", msg.name)
@@ -243,6 +245,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// settings messages
 	case openFolderMsg:
 		if msg.err != nil {
+			m.statusError = true
 			m.status = fmt.Sprintf("Failed to open folder: %v", msg.err)
 		} else {
 			m.status = "Opened config folder in explorer"
@@ -301,6 +304,7 @@ func (m Model) handleBack() (tea.Model, tea.Cmd) {
 	default:
 		m.current = viewMenu
 		m.status = ""
+		m.statusError = false
 	}
 	return m, nil
 }
@@ -436,6 +440,7 @@ func (m Model) handleInstalledEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if err := m.rtManager.Remove(i.title); err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Failed to remove: %v", err)
 	} else {
 		m.status = fmt.Sprintf("Removed %s", i.title)
@@ -504,7 +509,6 @@ func (m Model) handleLocalModelEnter() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-
 type openFolderMsg struct{ err error }
 
 func (m Model) handleSettingsEnter() (tea.Model, tea.Cmd) {
@@ -524,6 +528,7 @@ func (m Model) handleSettingsEnter() (tea.Model, tea.Cmd) {
 
 func (m Model) handleReleasesMsg(msg releasesMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Error: %v", msg.err)
 		m.current = viewMenu
 		return m, nil
@@ -544,6 +549,7 @@ func (m Model) handleReleasesMsg(msg releasesMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleRuntimeDownloadMsg(msg runtimeDownloadMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Download failed: %v", msg.err)
 	} else {
 		m.status = fmt.Sprintf("Downloaded %s successfully", msg.dirName)
@@ -554,6 +560,7 @@ func (m Model) handleRuntimeDownloadMsg(msg runtimeDownloadMsg) (tea.Model, tea.
 
 func (m Model) handleInstalledRuntimesMsg(msg installedRuntimesMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Error: %v", msg.err)
 		m.current = viewMenu
 		return m, nil
@@ -573,6 +580,7 @@ func (m Model) handleInstalledRuntimesMsg(msg installedRuntimesMsg) (tea.Model, 
 
 func (m Model) handleModelSearchMsg(msg modelSearchMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Error: %v", msg.err)
 		m.current = viewMenu
 		return m, nil
@@ -593,6 +601,7 @@ func (m Model) handleModelSearchMsg(msg modelSearchMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleModelFilesMsg(msg modelFilesMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Error: %v", msg.err)
 		m.current = viewModelResults
 		return m, nil
@@ -618,6 +627,7 @@ func (m Model) handleModelFilesMsg(msg modelFilesMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleModelDownloadMsg(msg modelDownloadMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Download failed: %v", msg.err)
 	} else {
 		m.status = fmt.Sprintf("Downloaded %s successfully", msg.filename)
@@ -628,6 +638,7 @@ func (m Model) handleModelDownloadMsg(msg modelDownloadMsg) (tea.Model, tea.Cmd)
 
 func (m Model) handleLocalModelsMsg(msg localModelsMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
+		m.statusError = true
 		m.status = fmt.Sprintf("Error: %v", msg.err)
 		m.current = viewMenu
 		return m, nil
@@ -715,7 +726,7 @@ func (m Model) View() string {
 
 	if m.status != "" && m.current == viewMenu {
 		style := lipgloss.NewStyle().MarginLeft(2)
-		if strings.HasPrefix(m.status, "Error:") || strings.HasPrefix(m.status, "Failed") || strings.HasPrefix(m.status, "Download failed") {
+		if m.statusError {
 			style = style.Foreground(lipgloss.Color("196")) // red
 		} else {
 			style = style.Foreground(lipgloss.Color("241")) // gray
