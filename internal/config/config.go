@@ -36,6 +36,7 @@ func Load(path string) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	fillDefaults(&cfg)
 	return &cfg, nil
 }
 
@@ -57,6 +58,25 @@ func EnsureExists(path string, cfg *Config) error {
 		return nil // already exists
 	}
 	return Save(path, cfg)
+}
+
+func fillDefaults(cfg *Config) {
+	d := defaults()
+	if cfg.RuntimeDir == "" {
+		cfg.RuntimeDir = d.RuntimeDir
+	}
+	if cfg.ProfileDir == "" {
+		cfg.ProfileDir = d.ProfileDir
+	}
+	if cfg.DefaultBackend == "" {
+		cfg.DefaultBackend = d.DefaultBackend
+	}
+	if cfg.Port == 0 {
+		cfg.Port = d.Port
+	}
+	if len(cfg.ModelDirs) == 0 {
+		cfg.ModelDirs = d.ModelDirs
+	}
 }
 
 func defaults() *Config {

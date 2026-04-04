@@ -60,6 +60,11 @@ func NewManager(dir string) *Manager {
 	return &Manager{dir: dir}
 }
 
+// Dir returns the profile storage directory.
+func (m *Manager) Dir() string {
+	return m.dir
+}
+
 // Save writes a profile to disk.
 func (m *Manager) Save(p *Profile) error {
 	if err := os.MkdirAll(m.dir, 0o755); err != nil {

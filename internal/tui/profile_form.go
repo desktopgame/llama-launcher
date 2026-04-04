@@ -14,11 +14,9 @@ import (
 	"github.com/desktopgame/llama-launcher/internal/runtime"
 )
 
-type profileFormState struct {
-	form    *huh.Form
-	editing *profile.Profile
-
-	// bound values
+// profileFormValues holds form-bound values via pointers so they survive
+// Bubble Tea's value-copy semantics.
+type profileFormValues struct {
 	profileName string
 	modelPath   string
 	runtimeDir  string
@@ -28,6 +26,12 @@ type profileFormState struct {
 	noMmap      bool
 	mmprojPath  string
 	extraArgs   string
+}
+
+type profileFormState struct {
+	form    *huh.Form
+	editing *profile.Profile
+	vals    *profileFormValues // pointer so huh bindings survive copies
 }
 
 // --- messages ---
@@ -63,23 +67,24 @@ func newProfileFormState(
 		width = 80
 	}
 
-	pf := profileFormState{editing: editing}
+	vals := &profileFormValues{}
+	pf := profileFormState{editing: editing, vals: vals}
 
 	// pre-fill if editing
 	if editing != nil {
-		pf.profileName = editing.Name
-		pf.modelPath = editing.ModelPath
-		pf.runtimeDir = editing.RuntimeDirName
+		vals.profileName = editing.Name
+		vals.modelPath = editing.ModelPath
+		vals.runtimeDir = editing.RuntimeDirName
 		if editing.ContextSize > 0 {
-			pf.contextSize = strconv.Itoa(editing.ContextSize)
+			vals.contextSize = strconv.Itoa(editing.ContextSize)
 		}
 		if editing.GPULayers > 0 {
-			pf.gpuLayers = strconv.Itoa(editing.GPULayers)
+			vals.gpuLayers = strconv.Itoa(editing.GPULayers)
 		}
-		pf.flashAttn = editing.FlashAttention
-		pf.noMmap = editing.NoMmap
-		pf.mmprojPath = editing.MMProjPath
-		pf.extraArgs = editing.ExtraArgs
+		vals.flashAttn = editing.FlashAttention
+		vals.noMmap = editing.NoMmap
+		vals.mmprojPath = editing.MMProjPath
+		vals.extraArgs = editing.ExtraArgs
 	}
 
 	// model options
@@ -119,7 +124,7 @@ func newProfileFormState(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Profile Name").
-				Value(&pf.profileName).
+				Value(&vals.profileName).
 				Validate(func(s string) error {
 					if strings.TrimSpace(s) == "" {
 						return fmt.Errorf("name is required")
@@ -129,36 +134,36 @@ func newProfileFormState(
 			huh.NewSelect[string]().
 				Title("Model").
 				Options(modelOptions...).
-				Value(&pf.modelPath),
+				Value(&vals.modelPath),
 			huh.NewSelect[string]().
 				Title("Runtime").
 				Options(runtimeOptions...).
-				Value(&pf.runtimeDir),
+				Value(&vals.runtimeDir),
 		),
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Context Size (empty = default)").
-				Value(&pf.contextSize).
+				Value(&vals.contextSize).
 				Validate(numValidator),
 			huh.NewInput().
 				Title("GPU Layers (empty = default)").
-				Value(&pf.gpuLayers).
+				Value(&vals.gpuLayers).
 				Validate(numValidator),
 			huh.NewConfirm().
 				Title("Flash Attention").
-				Value(&pf.flashAttn),
+				Value(&vals.flashAttn),
 			huh.NewConfirm().
 				Title("Disable mmap").
-				Value(&pf.noMmap),
+				Value(&vals.noMmap),
 		),
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("mmproj (for vision models)").
 				Options(mmprojOptions...).
-				Value(&pf.mmprojPath),
+				Value(&vals.mmprojPath),
 			huh.NewText().
 				Title("Extra Args (free-form llama-server options)").
-				Value(&pf.extraArgs),
+				Value(&vals.extraArgs),
 		),
 	).WithWidth(width).WithShowHelp(true)
 
@@ -166,19 +171,20 @@ func newProfileFormState(
 }
 
 func (pf *profileFormState) toProfile() *profile.Profile {
-	ctxSize, _ := strconv.Atoi(pf.contextSize)
-	gpuLayers, _ := strconv.Atoi(pf.gpuLayers)
+	v := pf.vals
+	ctxSize, _ := strconv.Atoi(v.contextSize)
+	gpuLayers, _ := strconv.Atoi(v.gpuLayers)
 
 	return &profile.Profile{
-		Name:           strings.TrimSpace(pf.profileName),
-		ModelPath:      pf.modelPath,
-		RuntimeDirName: pf.runtimeDir,
+		Name:           strings.TrimSpace(v.profileName),
+		ModelPath:      v.modelPath,
+		RuntimeDirName: v.runtimeDir,
 		ContextSize:    ctxSize,
 		GPULayers:      gpuLayers,
-		FlashAttention: pf.flashAttn,
-		NoMmap:         pf.noMmap,
-		MMProjPath:     pf.mmprojPath,
-		ExtraArgs:      pf.extraArgs,
+		FlashAttention: v.flashAttn,
+		NoMmap:         v.noMmap,
+		MMProjPath:     v.mmprojPath,
+		ExtraArgs:      v.extraArgs,
 	}
 }
 
@@ -200,10 +206,21 @@ func (m Model) updateProfileForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if f.State == huh.StateCompleted {
 			p := pf.toProfile()
 			mgr := m.profManager
-			return m, func() tea.Msg {
+			var removeOld bool
+			oldName := ""
+			if pf.editing != nil && pf.editing.Name != p.Name {
+				oldName = pf.editing.Name
+				removeOld = true
+			}
+			m.current = viewLoading
+			m.status = fmt.Sprintf("Saving profile \"%s\"...", p.Name)
+			return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
+				if removeOld {
+					mgr.Remove(oldName)
+				}
 				err := mgr.Save(p)
 				return profileSavedMsg{name: p.Name, err: err}
-			}
+			})
 		}
 		if f.State == huh.StateAborted {
 			m.current = viewMenu
@@ -253,9 +270,24 @@ func (m Model) handleProfilesMsg(msg profilesMsg) (tea.Model, tea.Cmd) {
 		h = 20
 	}
 	m.profileList = list.New(items, list.NewDefaultDelegate(), w, h)
-	m.profileList.Title = "Profiles (enter to edit, q to back)"
+	m.profileList.Title = "Profiles (enter to edit, d to delete, q to back)"
 	m.current = viewProfiles
 	return m, nil
+}
+
+func (m Model) handleProfileDelete() (tea.Model, tea.Cmd) {
+	i, ok := m.profileList.SelectedItem().(menuItem)
+	if !ok || i.title == "+ New Profile" {
+		return m, nil
+	}
+
+	if err := m.profManager.Remove(i.title); err != nil {
+		m.status = fmt.Sprintf("Failed to remove: %v", err)
+	} else {
+		m.status = fmt.Sprintf("Removed profile \"%s\"", i.title)
+	}
+	// reload profile list
+	return m, listProfilesCmd(m.profManager)
 }
 
 func (m Model) handleProfilesEnter() (tea.Model, tea.Cmd) {

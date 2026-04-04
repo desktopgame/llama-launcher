@@ -203,6 +203,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.localTabIdx = (m.localTabIdx + 1) % len(m.localTabs)
 				return m, nil
 			}
+		case "d":
+			if m.current == viewProfiles {
+				return m.handleProfileDelete()
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -710,7 +714,12 @@ func (m Model) View() string {
 	}
 
 	if m.status != "" && m.current == viewMenu {
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginLeft(2)
+		style := lipgloss.NewStyle().MarginLeft(2)
+		if strings.HasPrefix(m.status, "Error:") || strings.HasPrefix(m.status, "Failed") || strings.HasPrefix(m.status, "Download failed") {
+			style = style.Foreground(lipgloss.Color("196")) // red
+		} else {
+			style = style.Foreground(lipgloss.Color("241")) // gray
+		}
 		b.WriteString("\n" + style.Render(m.status))
 	}
 
