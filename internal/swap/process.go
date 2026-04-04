@@ -35,8 +35,7 @@ func (p *Process) Start(configPath string, port int) error {
 	}
 
 	p.cmd = exec.Command("llama-swap", "--config", configPath, "--listen", fmt.Sprintf(":%d", port))
-	p.cmd.Stdout = os.Stdout
-	p.cmd.Stderr = os.Stderr
+	// don't pipe to os.Stdout/Stderr — it corrupts Bubble Tea's alt screen
 
 	if err := p.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start llama-swap: %w", err)
