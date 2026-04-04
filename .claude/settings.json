@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./private/**)",
+      "Edit(./private/**)",
+
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+
+      "Read(.env)",
+      "Read(.env.*)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git pull *)",
+      "Bash(uv run *)",
+
+      "WebFetch"
+    ],
+    "allow": [
+      "Bash(mkdir -p *)",
+      "Bash(uv format *)",
+      "Bash(uvx ruff *)",
+
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log -n *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  },
+  "env": {
+    "EDITOR": "code --wait",
+    "VISUAL": "code --wait"
+  }
+}
