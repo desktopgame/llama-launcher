@@ -35,7 +35,7 @@ func (p *Process) Start(configPath string, port int) error {
 		return fmt.Errorf("llama-swap is already running")
 	}
 
-	p.cmd = exec.Command("llama-swap", "--config", configPath, "--listen", fmt.Sprintf(":%d", port))
+	p.cmd = exec.Command("llama-swap", "--config", configPath, "--listen", fmt.Sprintf("localhost:%d", port))
 
 	// write logs to file in the same temp dir as config.yaml
 	logPath := filepath.Join(filepath.Dir(configPath), "llama-swap.log")
