@@ -19,16 +19,19 @@ import (
 // profileFormValues holds form-bound values via pointers so they survive
 // Bubble Tea's value-copy semantics.
 type profileFormValues struct {
-	profileName string
-	modelType   string
-	modelPath   string
-	runtimeDir  string
-	contextSize string
-	gpuLayers   string
-	flashAttn   bool
-	noMmap      bool
-	mmprojPath  string
-	extraArgs   string
+	profileName            string
+	modelType              string
+	modelPath              string
+	runtimeDir             string
+	contextSize            string
+	gpuLayers              string
+	flashAttn              bool
+	noMmap                 bool
+	jinja                  bool
+	reasoningBudget        string
+	reasoningBudgetMessage string
+	mmprojPath             string
+	extraArgs              string
 }
 
 type profileFormState struct {
@@ -90,6 +93,11 @@ func newProfileFormState(
 		}
 		vals.flashAttn = editing.FlashAttention
 		vals.noMmap = editing.NoMmap
+		vals.jinja = editing.Jinja
+		if editing.ReasoningBudget > 0 {
+			vals.reasoningBudget = strconv.Itoa(editing.ReasoningBudget)
+		}
+		vals.reasoningBudgetMessage = editing.ReasoningBudgetMessage
 		vals.mmprojPath = editing.MMProjPath
 		vals.extraArgs = editing.ExtraArgs
 	}
@@ -170,6 +178,16 @@ func newProfileFormState(
 			huh.NewConfirm().
 				Title("Flash Attention").
 				Value(&vals.flashAttn),
+			huh.NewConfirm().
+				Title("Jinja Templates").
+				Value(&vals.jinja),
+			huh.NewInput().
+				Title("Reasoning Budget (empty = default)").
+				Value(&vals.reasoningBudget).
+				Validate(numValidator),
+			huh.NewInput().
+				Title("Reasoning Budget Message (empty = default)").
+				Value(&vals.reasoningBudgetMessage),
 		)
 	}
 	group2Fields = append(group2Fields,
@@ -200,17 +218,21 @@ func (pf *profileFormState) toProfile() *profile.Profile {
 	ctxSize, _ := strconv.Atoi(v.contextSize)
 	gpuLayers, _ := strconv.Atoi(v.gpuLayers)
 
+	reasoningBudget, _ := strconv.Atoi(v.reasoningBudget)
 	return &profile.Profile{
-		Name:           strings.TrimSpace(v.profileName),
-		ModelType:      profile.ModelType(v.modelType),
-		ModelPath:      v.modelPath,
-		RuntimeDirName: v.runtimeDir,
-		ContextSize:    ctxSize,
-		GPULayers:      gpuLayers,
-		FlashAttention: v.flashAttn,
-		NoMmap:         v.noMmap,
-		MMProjPath:     v.mmprojPath,
-		ExtraArgs:      v.extraArgs,
+		Name:                   strings.TrimSpace(v.profileName),
+		ModelType:              profile.ModelType(v.modelType),
+		ModelPath:              v.modelPath,
+		RuntimeDirName:         v.runtimeDir,
+		ContextSize:            ctxSize,
+		GPULayers:              gpuLayers,
+		FlashAttention:         v.flashAttn,
+		NoMmap:                 v.noMmap,
+		Jinja:                  v.jinja,
+		ReasoningBudget:        reasoningBudget,
+		ReasoningBudgetMessage: v.reasoningBudgetMessage,
+		MMProjPath:             v.mmprojPath,
+		ExtraArgs:              v.extraArgs,
 	}
 }
 
@@ -310,6 +332,15 @@ func (m Model) viewProfileDetail() string {
 		} else {
 			line("Flash Attn", "no")
 		}
+	}
+	if p.Jinja {
+		line("Jinja", "yes")
+	}
+	if p.ReasoningBudget > 0 {
+		line("Reasoning Budget", strconv.Itoa(p.ReasoningBudget))
+	}
+	if p.ReasoningBudgetMessage != "" {
+		line("Reasoning Budget/Msg", p.ReasoningBudgetMessage)
 	}
 	if p.NoMmap {
 		line("mmap", "disabled")

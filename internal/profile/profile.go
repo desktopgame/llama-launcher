@@ -18,16 +18,19 @@ const (
 
 // Profile represents a combination of model + runtime + launch parameters.
 type Profile struct {
-	Name           string    `json:"name"`
-	ModelPath      string    `json:"model_path"`
-	RuntimeDirName string    `json:"runtime_dir_name"`
-	ModelType      ModelType `json:"model_type"`
-	ContextSize    int       `json:"context_size,omitempty"`
-	GPULayers      int       `json:"gpu_layers,omitempty"`
-	FlashAttention bool      `json:"flash_attention,omitempty"`
-	NoMmap         bool      `json:"no_mmap,omitempty"`
-	MMProjPath     string    `json:"mmproj_path,omitempty"`
-	ExtraArgs      string    `json:"extra_args,omitempty"`
+	Name                   string    `json:"name"`
+	ModelPath              string    `json:"model_path"`
+	RuntimeDirName         string    `json:"runtime_dir_name"`
+	ModelType              ModelType `json:"model_type"`
+	ContextSize            int       `json:"context_size,omitempty"`
+	GPULayers              int       `json:"gpu_layers,omitempty"`
+	FlashAttention         bool      `json:"flash_attention,omitempty"`
+	NoMmap                 bool      `json:"no_mmap,omitempty"`
+	Jinja                  bool      `json:"jinja,omitempty"`
+	ReasoningBudget        int       `json:"reasoning_budget,omitempty"`
+	ReasoningBudgetMessage string    `json:"reasoning_budget_message,omitempty"`
+	MMProjPath             string    `json:"mmproj_path,omitempty"`
+	ExtraArgs              string    `json:"extra_args,omitempty"`
 }
 
 // BuildArgs returns the command-line arguments for llama-server.
@@ -50,6 +53,15 @@ func (p *Profile) BuildArgs(port int) []string {
 	}
 	if p.NoMmap {
 		args = append(args, "--no-mmap")
+	}
+	if p.Jinja {
+		args = append(args, "--jinja")
+	}
+	if p.ReasoningBudget > 0 {
+		args = append(args, "--reasoning-budget", fmt.Sprintf("%d", p.ReasoningBudget))
+	}
+	if p.ReasoningBudgetMessage != "" {
+		args = append(args, "--reasoning-budget-message", p.ReasoningBudgetMessage)
 	}
 	if p.MMProjPath != "" {
 		args = append(args, "--mmproj", p.MMProjPath)
