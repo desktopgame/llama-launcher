@@ -61,8 +61,8 @@ func GenerateConfig(
 			group = groupResident
 		}
 
-		fmt.Fprintf(&b, "  %s:\n", entry.ProfileName)
-		fmt.Fprintf(&b, "    cmd: %s\n", cmd)
+		fmt.Fprintf(&b, "  \"%s\":\n", entry.ProfileName)
+		fmt.Fprintf(&b, "    cmd: \"%s\"\n", strings.ReplaceAll(cmd, "\"", "\\\""))
 		fmt.Fprintf(&b, "    proxy: \"http://127.0.0.1:%d\"\n", backendPort)
 		fmt.Fprintf(&b, "    ttl: %d\n", entry.TTL)
 		fmt.Fprintf(&b, "    group: %s\n", group)

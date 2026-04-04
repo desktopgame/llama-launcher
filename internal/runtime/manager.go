@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/desktopgame/llama-launcher/internal/util"
 	"time"
@@ -155,7 +156,6 @@ func parseDirName(name string) (tag, backend string) {
 	return name, ""
 }
 
-
 func extractZip(src, dest string) error {
 	r, err := zip.OpenReader(src)
 	if err != nil {
@@ -163,8 +163,12 @@ func extractZip(src, dest string) error {
 	}
 	defer r.Close()
 
+	cleanDest := filepath.Clean(dest) + string(os.PathSeparator)
 	for _, f := range r.File {
 		path := filepath.Join(dest, f.Name)
+		if !strings.HasPrefix(filepath.Clean(path)+string(os.PathSeparator), cleanDest) {
+			return fmt.Errorf("illegal file path in zip: %s", f.Name)
+		}
 
 		if f.FileInfo().IsDir() {
 			os.MkdirAll(path, 0o755)

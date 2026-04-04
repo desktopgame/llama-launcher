@@ -13,6 +13,7 @@ import (
 	"github.com/desktopgame/llama-launcher/internal/model"
 	"github.com/desktopgame/llama-launcher/internal/profile"
 	"github.com/desktopgame/llama-launcher/internal/runtime"
+	"github.com/desktopgame/llama-launcher/internal/util"
 )
 
 // profileFormValues holds form-bound values via pointers so they survive
@@ -137,12 +138,7 @@ func newProfileFormState(
 		huh.NewInput().
 			Title("Profile Name").
 			Value(&vals.profileName).
-			Validate(func(s string) error {
-				if strings.TrimSpace(s) == "" {
-					return fmt.Errorf("name is required")
-				}
-				return nil
-			}),
+			Validate(util.ValidateName),
 		huh.NewSelect[string]().
 			Title("Model Type").
 			Options(modelTypeOptions...).

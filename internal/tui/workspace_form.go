@@ -7,11 +7,12 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/huh"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/desktopgame/llama-launcher/internal/profile"
 	"github.com/desktopgame/llama-launcher/internal/swap"
+	"github.com/desktopgame/llama-launcher/internal/util"
 	"github.com/desktopgame/llama-launcher/internal/workspace"
 )
 
@@ -43,11 +44,11 @@ type wsFormState struct {
 	form *huh.Form
 
 	// step 2: entry list
-	entries     []workspace.Entry
-	entryList   list.Model
-	editingIdx  int
-	entryForm   *huh.Form
-	entryVals   *wsEntryEdit
+	entries    []workspace.Entry
+	entryList  list.Model
+	editingIdx int
+	entryForm  *huh.Form
+	entryVals  *wsEntryEdit
 }
 
 // --- messages ---
@@ -105,12 +106,7 @@ func newWsFormState(
 			huh.NewInput().
 				Title("Workspace Name").
 				Value(&vals.wsName).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("name is required")
-					}
-					return nil
-				}),
+				Validate(util.ValidateName),
 			huh.NewMultiSelect[string]().
 				Title("Select Profiles").
 				Value(&vals.selectedProfiles).
@@ -568,4 +564,3 @@ func listWorkspacesCmd(mgr *workspace.Manager) tea.Cmd {
 		return workspacesMsg{workspaces: workspaces, err: err}
 	}
 }
-
