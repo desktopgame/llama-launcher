@@ -43,7 +43,7 @@ func (p *Profile) BuildArgs(port int) []string {
 		args = append(args, "-ngl", fmt.Sprintf("%d", p.GPULayers))
 	}
 	if p.FlashAttention && p.ModelType != ModelTypeEmbedding {
-		args = append(args, "-fa")
+		args = append(args, "-fa", "on")
 	}
 	if p.ModelType == ModelTypeEmbedding {
 		args = append(args, "--embedding")
