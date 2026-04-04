@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/desktopgame/llama-launcher/internal/config"
 	"github.com/desktopgame/llama-launcher/internal/model"
+	"github.com/desktopgame/llama-launcher/internal/profile"
 	"github.com/desktopgame/llama-launcher/internal/runtime"
 )
 
@@ -30,6 +31,9 @@ const (
 	viewModelResults
 	viewModelFiles
 	viewLocalModels
+	// profile views
+	viewProfiles
+	viewProfileForm
 	// settings
 	viewSettings
 	// shared
@@ -78,6 +82,11 @@ type Model struct {
 	// model: local models (tabbed by source)
 	localTabs       []localTab // one per source
 	localTabIdx     int        // active tab index
+	// profile
+	profManager     *profile.Manager
+	profileList     list.Model
+	fetchedProfiles []*profile.Profile
+	profileForm     profileFormState
 	// ui
 	spinner spinner.Model
 	status  string
@@ -90,6 +99,7 @@ func NewModel() Model {
 	cfg, _ := config.Load(cfgPath)
 	rtMgr := runtime.NewManager(cfg.RuntimeDir)
 	modelMgr := model.NewManager(cfg.ModelDirs, cfg.LMStudioDir)
+	profMgr := profile.NewManager(cfg.ProfileDir)
 
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -105,6 +115,7 @@ func NewModel() Model {
 		menuItem{title: "Installed Runtimes", desc: "View and manage installed llama.cpp versions"},
 		menuItem{title: "Search Models", desc: "Search and download GGUF models from HuggingFace"},
 		menuItem{title: "Local Models", desc: "View GGUF models on disk"},
+		menuItem{title: "Profiles", desc: "Manage model + runtime + parameter profiles"},
 		menuItem{title: "Settings", desc: "View current settings and open config file"},
 	}
 
@@ -121,6 +132,7 @@ func NewModel() Model {
 		menu:         menuList,
 		searchInput:  ti,
 		spinner:      s,
+		profManager:  profMgr,
 	}
 }
 
@@ -164,9 +176,12 @@ func (m Model) Init() tea.Cmd {
 // --- Update ---
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// handle text input when searching
+	// handle text input views
 	if m.current == viewModelSearch {
 		return m.updateModelSearch(msg)
+	}
+	if m.current == viewProfileForm {
+		return m.updateProfileForm(msg)
 	}
 
 	switch msg := msg.(type) {
@@ -206,6 +221,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleRuntimeDownloadMsg(msg)
 	case installedRuntimesMsg:
 		return m.handleInstalledRuntimesMsg(msg)
+
+	// profile messages
+	case profilesMsg:
+		return m.handleProfilesMsg(msg)
+	case profileFormDataMsg:
+		return m.handleProfileFormDataMsg(msg)
+	case profileSavedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Failed to save: %v", msg.err)
+		} else {
+			m.status = fmt.Sprintf("Saved profile \"%s\"", msg.name)
+		}
+		m.current = viewMenu
+		return m, nil
 
 	// settings messages
 	case openFolderMsg:
@@ -251,6 +280,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.localTabs) > 0 {
 			m.localTabs[m.localTabIdx].list, cmd = m.localTabs[m.localTabIdx].list.Update(msg)
 		}
+	case viewProfiles:
+		m.profileList, cmd = m.profileList.Update(msg)
 	}
 	return m, cmd
 }
@@ -288,6 +319,8 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m.handleModelFileEnter()
 	case viewLocalModels:
 		return m.handleLocalModelEnter()
+	case viewProfiles:
+		return m.handleProfilesEnter()
 	case viewSettings:
 		return m.handleSettingsEnter()
 	}
@@ -316,6 +349,10 @@ func (m Model) handleMenuEnter() (tea.Model, tea.Cmd) {
 		m.current = viewLoading
 		m.status = "Scanning model directories..."
 		return m, tea.Batch(m.spinner.Tick, listLocalModelsCmd(m.modelManager))
+	case "Profiles":
+		m.current = viewLoading
+		m.status = "Loading profiles..."
+		return m, tea.Batch(m.spinner.Tick, listProfilesCmd(m.profManager))
 	case "Settings":
 		m.current = viewSettings
 		return m, nil
@@ -662,6 +699,10 @@ func (m Model) View() string {
 		b.WriteString(m.modelFiles.View())
 	case viewLocalModels:
 		b.WriteString(m.viewLocalModels())
+	case viewProfiles:
+		b.WriteString(m.profileList.View())
+	case viewProfileForm:
+		b.WriteString(m.viewProfileForm())
 	case viewSettings:
 		b.WriteString(m.viewSettings())
 	case viewLoading:

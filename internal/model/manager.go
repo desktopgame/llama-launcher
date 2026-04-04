@@ -176,6 +176,30 @@ func scanLMStudio(root string) ([]LocalModel, error) {
 	return models, nil
 }
 
+// ListMMProj returns paths of mmproj GGUF files across all sources.
+func (m *Manager) ListMMProj() []string {
+	var mmprojs []string
+	scan := func(root string) {
+		filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			lower := strings.ToLower(d.Name())
+			if strings.HasSuffix(lower, ".gguf") && strings.Contains(lower, "mmproj") {
+				mmprojs = append(mmprojs, path)
+			}
+			return nil
+		})
+	}
+	for _, dir := range m.dirs {
+		scan(dir)
+	}
+	if m.lmStudioDir != "" {
+		scan(m.lmStudioDir)
+	}
+	return mmprojs
+}
+
 // Download fetches a GGUF file and saves it to destDir.
 func (m *Manager) Download(file GGUFFile, destDir string, progress func(downloaded, total int64)) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
