@@ -87,7 +87,11 @@ func scanRecursive(root string, source Source) ([]LocalModel, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(strings.ToLower(d.Name()), ".gguf") {
+		lower := strings.ToLower(d.Name())
+		if !strings.HasSuffix(lower, ".gguf") {
+			return nil
+		}
+		if isAuxiliaryGGUF(lower) {
 			return nil
 		}
 		info, err := d.Info()
@@ -145,7 +149,11 @@ func scanLMStudio(root string) ([]LocalModel, error) {
 				if f.IsDir() {
 					continue
 				}
-				if !strings.HasSuffix(strings.ToLower(f.Name()), ".gguf") {
+				lower := strings.ToLower(f.Name())
+				if !strings.HasSuffix(lower, ".gguf") {
+					continue
+				}
+				if isAuxiliaryGGUF(lower) {
 					continue
 				}
 				info, err := f.Info()
@@ -222,6 +230,13 @@ func (m *Manager) Download(file GGUFFile, destDir string, progress func(download
 // Remove deletes a local model file.
 func (m *Manager) Remove(path string) error {
 	return os.Remove(path)
+}
+
+// isAuxiliaryGGUF returns true for GGUF files that are not standalone models
+// (e.g. multimodal projectors). These are used alongside a main model via
+// --mmproj and shouldn't appear in the primary model list.
+func isAuxiliaryGGUF(lowerName string) bool {
+	return strings.Contains(lowerName, "mmproj")
 }
 
 type progressReader struct {
