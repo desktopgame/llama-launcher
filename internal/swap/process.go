@@ -14,6 +14,7 @@ type Process struct {
 	cmd     *exec.Cmd
 	running bool
 	cfgPath string // temp config.yaml path
+	logFile *os.File
 }
 
 // CheckInstalled returns nil if llama-swap is found in PATH.
@@ -35,9 +36,19 @@ func (p *Process) Start(configPath string, port int) error {
 	}
 
 	p.cmd = exec.Command("llama-swap", "--config", configPath, "--listen", fmt.Sprintf(":%d", port))
-	// don't pipe to os.Stdout/Stderr — it corrupts Bubble Tea's alt screen
+
+	// write logs to file in the same temp dir as config.yaml
+	logPath := filepath.Join(filepath.Dir(configPath), "llama-swap.log")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("failed to create log file: %w", err)
+	}
+	p.logFile = logFile
+	p.cmd.Stdout = logFile
+	p.cmd.Stderr = logFile
 
 	if err := p.cmd.Start(); err != nil {
+		logFile.Close()
 		return fmt.Errorf("failed to start llama-swap: %w", err)
 	}
 
@@ -49,10 +60,9 @@ func (p *Process) Start(configPath string, port int) error {
 		p.cmd.Wait()
 		p.mu.Lock()
 		p.running = false
-		// clean up temp config
-		if p.cfgPath != "" {
-			os.RemoveAll(filepath.Dir(p.cfgPath))
-			p.cfgPath = ""
+		if p.logFile != nil {
+			p.logFile.Close()
+			p.logFile = nil
 		}
 		p.mu.Unlock()
 	}()
@@ -74,10 +84,9 @@ func (p *Process) Stop() error {
 	}
 
 	p.running = false
-	// clean up temp config dir
-	if p.cfgPath != "" {
-		os.RemoveAll(filepath.Dir(p.cfgPath))
-		p.cfgPath = ""
+	if p.logFile != nil {
+		p.logFile.Close()
+		p.logFile = nil
 	}
 
 	return nil
@@ -88,4 +97,14 @@ func (p *Process) IsRunning() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.running
+}
+
+// LogPath returns the path to the log file, or empty if not running.
+func (p *Process) LogPath() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cfgPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(p.cfgPath), "llama-swap.log")
 }

@@ -268,7 +268,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusError = true
 			m.status = fmt.Sprintf("Failed to start: %v", msg.err)
 		} else {
-			m.status = fmt.Sprintf("llama-swap started with \"%s\" on port %d", msg.wsName, m.cfg.Port)
+			logPath := m.swapProc.LogPath()
+			m.status = fmt.Sprintf("llama-swap started with \"%s\" on port %d (log: %s)", msg.wsName, m.cfg.Port, logPath)
 		}
 		m.current = viewMenu
 		return m, nil
