@@ -798,7 +798,12 @@ func (m Model) View() string {
 	case viewProfileForm:
 		b.WriteString(m.viewProfileForm())
 	case viewWorkspaces:
-		b.WriteString(m.workspaceList.View())
+		detail := m.viewWsDetail()
+		if detail != "" {
+			b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, m.workspaceList.View(), detail))
+		} else {
+			b.WriteString(m.workspaceList.View())
+		}
 	case viewWsForm:
 		b.WriteString(m.viewWsForm())
 	case viewSettings:

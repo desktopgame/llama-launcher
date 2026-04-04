@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/huh"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/desktopgame/llama-launcher/internal/profile"
 	"github.com/desktopgame/llama-launcher/internal/swap"
 	"github.com/desktopgame/llama-launcher/internal/workspace"
@@ -382,7 +383,8 @@ func (m Model) handleWorkspacesMsg(msg workspacesMsg) (tea.Model, tea.Cmd) {
 	if h <= 0 {
 		h = 20
 	}
-	m.workspaceList = list.New(items, list.NewDefaultDelegate(), w, h)
+	listW := w / 2
+	m.workspaceList = list.New(items, list.NewDefaultDelegate(), listW, h)
 	m.workspaceList.Title = "Workspaces (s start, x stop, enter edit, d del, q back)"
 	m.current = viewWorkspaces
 	return m, nil
@@ -446,6 +448,43 @@ func (m Model) handleWsDelete() (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Removed workspace \"%s\"", i.title)
 	}
 	return m, listWorkspacesCmd(m.wsMgr)
+}
+
+func (m Model) viewWsDetail() string {
+	idx := m.workspaceList.Index()
+	wsIdx := idx - 1 // first item is "+ New Workspace"
+	if wsIdx < 0 || wsIdx >= len(m.fetchedWorkspaces) {
+		return ""
+	}
+	ws := m.fetchedWorkspaces[wsIdx]
+
+	panelW := m.width/2 - 2
+	if panelW <= 0 {
+		panelW = 38
+	}
+
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	valueStyle := lipgloss.NewStyle().Bold(true)
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("241")).
+		Padding(1, 2).
+		Width(panelW)
+
+	var b strings.Builder
+	b.WriteString(labelStyle.Render("Name:") + " " + valueStyle.Render(ws.Name) + "\n")
+	b.WriteString(labelStyle.Render("Entries:") + " " + valueStyle.Render(fmt.Sprintf("%d", len(ws.Entries))) + "\n\n")
+
+	for _, e := range ws.Entries {
+		mode := "on-demand"
+		if e.Resident {
+			mode = "resident"
+		}
+		b.WriteString(valueStyle.Render(e.ProfileName) + "\n")
+		b.WriteString(fmt.Sprintf("  %s  TTL: %ds\n", labelStyle.Render(mode), e.TTL))
+	}
+
+	return borderStyle.Render(b.String())
 }
 
 // --- Launch handlers ---
