@@ -18,6 +18,7 @@ import (
 // Bubble Tea's value-copy semantics.
 type profileFormValues struct {
 	profileName string
+	modelType   string
 	modelPath   string
 	runtimeDir  string
 	contextSize string
@@ -67,12 +68,16 @@ func newProfileFormState(
 		width = 80
 	}
 
-	vals := &profileFormValues{}
+	vals := &profileFormValues{modelType: string(profile.ModelTypeGeneration)}
 	pf := profileFormState{editing: editing, vals: vals}
 
 	// pre-fill if editing
 	if editing != nil {
 		vals.profileName = editing.Name
+		vals.modelType = string(editing.ModelType)
+		if vals.modelType == "" {
+			vals.modelType = string(profile.ModelTypeGeneration)
+		}
 		vals.modelPath = editing.ModelPath
 		vals.runtimeDir = editing.RuntimeDirName
 		if editing.ContextSize > 0 {
@@ -120,52 +125,75 @@ func newProfileFormState(
 		return nil
 	}
 
-	pf.form = huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Profile Name").
-				Value(&vals.profileName).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("name is required")
-					}
-					return nil
-				}),
-			huh.NewSelect[string]().
-				Title("Model").
-				Options(modelOptions...).
-				Value(&vals.modelPath),
-			huh.NewSelect[string]().
-				Title("Runtime").
-				Options(runtimeOptions...).
-				Value(&vals.runtimeDir),
-		),
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Context Size (empty = default)").
-				Value(&vals.contextSize).
-				Validate(numValidator),
-			huh.NewInput().
-				Title("GPU Layers (empty = default)").
-				Value(&vals.gpuLayers).
-				Validate(numValidator),
+	// model type options
+	modelTypeOptions := []huh.Option[string]{
+		huh.NewOption("Generation", string(profile.ModelTypeGeneration)),
+		huh.NewOption("Embedding", string(profile.ModelTypeEmbedding)),
+	}
+
+	// group 1: basic info
+	group1 := huh.NewGroup(
+		huh.NewInput().
+			Title("Profile Name").
+			Value(&vals.profileName).
+			Validate(func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return fmt.Errorf("name is required")
+				}
+				return nil
+			}),
+		huh.NewSelect[string]().
+			Title("Model Type").
+			Options(modelTypeOptions...).
+			Value(&vals.modelType),
+		huh.NewSelect[string]().
+			Title("Model").
+			Options(modelOptions...).
+			Value(&vals.modelPath),
+		huh.NewSelect[string]().
+			Title("Runtime").
+			Options(runtimeOptions...).
+			Value(&vals.runtimeDir),
+	)
+
+	// group 2: parameters (flash attention only for generation)
+	var group2Fields []huh.Field
+	group2Fields = append(group2Fields,
+		huh.NewInput().
+			Title("Context Size (empty = default)").
+			Value(&vals.contextSize).
+			Validate(numValidator),
+		huh.NewInput().
+			Title("GPU Layers (empty = default)").
+			Value(&vals.gpuLayers).
+			Validate(numValidator),
+	)
+	if vals.modelType != string(profile.ModelTypeEmbedding) {
+		group2Fields = append(group2Fields,
 			huh.NewConfirm().
 				Title("Flash Attention").
 				Value(&vals.flashAttn),
-			huh.NewConfirm().
-				Title("Disable mmap").
-				Value(&vals.noMmap),
-		),
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("mmproj (for vision models)").
-				Options(mmprojOptions...).
-				Value(&vals.mmprojPath),
-			huh.NewText().
-				Title("Extra Args (free-form llama-server options)").
-				Value(&vals.extraArgs),
-		),
-	).WithWidth(width).WithShowHelp(true)
+		)
+	}
+	group2Fields = append(group2Fields,
+		huh.NewConfirm().
+			Title("Disable mmap").
+			Value(&vals.noMmap),
+	)
+	group2 := huh.NewGroup(group2Fields...)
+
+	// group 3: extras
+	group3 := huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("mmproj (for vision models)").
+			Options(mmprojOptions...).
+			Value(&vals.mmprojPath),
+		huh.NewText().
+			Title("Extra Args (free-form llama-server options)").
+			Value(&vals.extraArgs),
+	)
+
+	pf.form = huh.NewForm(group1, group2, group3).WithWidth(width).WithShowHelp(true)
 
 	return pf
 }
@@ -177,6 +205,7 @@ func (pf *profileFormState) toProfile() *profile.Profile {
 
 	return &profile.Profile{
 		Name:           strings.TrimSpace(v.profileName),
+		ModelType:      profile.ModelType(v.modelType),
 		ModelPath:      v.modelPath,
 		RuntimeDirName: v.runtimeDir,
 		ContextSize:    ctxSize,

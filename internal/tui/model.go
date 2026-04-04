@@ -16,6 +16,7 @@ import (
 	"github.com/desktopgame/llama-launcher/internal/model"
 	"github.com/desktopgame/llama-launcher/internal/profile"
 	"github.com/desktopgame/llama-launcher/internal/runtime"
+	"github.com/desktopgame/llama-launcher/internal/workspace"
 )
 
 type view int
@@ -34,6 +35,9 @@ const (
 	// profile views
 	viewProfiles
 	viewProfileForm
+	// workspace views
+	viewWorkspaces
+	viewWsForm
 	// settings
 	viewSettings
 	// shared
@@ -87,6 +91,11 @@ type Model struct {
 	profileList     list.Model
 	fetchedProfiles []*profile.Profile
 	profileForm     profileFormState
+	// workspace
+	wsMgr              *workspace.Manager
+	workspaceList      list.Model
+	fetchedWorkspaces  []*workspace.Workspace
+	wsForm             wsFormState
 	// ui
 	spinner     spinner.Model
 	status      string
@@ -101,6 +110,7 @@ func NewModel() Model {
 	rtMgr := runtime.NewManager(cfg.RuntimeDir)
 	modelMgr := model.NewManager(cfg.ModelDirs, cfg.LMStudioDir)
 	profMgr := profile.NewManager(cfg.ProfileDir)
+	wsMgr := workspace.NewManager(cfg.WorkspaceDir)
 
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -117,6 +127,7 @@ func NewModel() Model {
 		menuItem{title: "Search Models", desc: "Search and download GGUF models from HuggingFace"},
 		menuItem{title: "Local Models", desc: "View GGUF models on disk"},
 		menuItem{title: "Profiles", desc: "Manage model + runtime + parameter profiles"},
+		menuItem{title: "Workspaces", desc: "Manage workspaces (profile sets for llama-swap)"},
 		menuItem{title: "Settings", desc: "View current settings and open config file"},
 	}
 
@@ -134,6 +145,7 @@ func NewModel() Model {
 		searchInput:  ti,
 		spinner:      s,
 		profManager:  profMgr,
+		wsMgr:        wsMgr,
 	}
 }
 
@@ -184,6 +196,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.current == viewProfileForm {
 		return m.updateProfileForm(msg)
 	}
+	if m.current == viewWsForm {
+		return m.updateWsForm(msg)
+	}
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -207,6 +222,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "d":
 			if m.current == viewProfiles {
 				return m.handleProfileDelete()
+			}
+			if m.current == viewWorkspaces {
+				return m.handleWsDelete()
 			}
 		}
 
@@ -232,6 +250,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleProfilesMsg(msg)
 	case profileFormDataMsg:
 		return m.handleProfileFormDataMsg(msg)
+	// workspace messages
+	case workspacesMsg:
+		return m.handleWorkspacesMsg(msg)
+	case wsFormDataMsg:
+		return m.handleWsFormDataMsg(msg)
+	case wsSavedMsg:
+		if msg.err != nil {
+			m.statusError = true
+			m.status = fmt.Sprintf("Failed to save: %v", msg.err)
+		} else {
+			m.status = fmt.Sprintf("Saved workspace \"%s\"", msg.name)
+		}
+		m.current = viewMenu
+		return m, nil
+
 	case profileSavedMsg:
 		if msg.err != nil {
 			m.statusError = true
@@ -289,6 +322,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case viewProfiles:
 		m.profileList, cmd = m.profileList.Update(msg)
+	case viewWorkspaces:
+		m.workspaceList, cmd = m.workspaceList.Update(msg)
 	}
 	return m, cmd
 }
@@ -329,6 +364,8 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m.handleLocalModelEnter()
 	case viewProfiles:
 		return m.handleProfilesEnter()
+	case viewWorkspaces:
+		return m.handleWorkspacesEnter()
 	case viewSettings:
 		return m.handleSettingsEnter()
 	}
@@ -361,6 +398,10 @@ func (m Model) handleMenuEnter() (tea.Model, tea.Cmd) {
 		m.current = viewLoading
 		m.status = "Loading profiles..."
 		return m, tea.Batch(m.spinner.Tick, listProfilesCmd(m.profManager))
+	case "Workspaces":
+		m.current = viewLoading
+		m.status = "Loading workspaces..."
+		return m, tea.Batch(m.spinner.Tick, listWorkspacesCmd(m.wsMgr))
 	case "Settings":
 		m.current = viewSettings
 		return m, nil
@@ -718,6 +759,10 @@ func (m Model) View() string {
 		b.WriteString(m.profileList.View())
 	case viewProfileForm:
 		b.WriteString(m.viewProfileForm())
+	case viewWorkspaces:
+		b.WriteString(m.workspaceList.View())
+	case viewWsForm:
+		b.WriteString(m.viewWsForm())
 	case viewSettings:
 		b.WriteString(m.viewSettings())
 	case viewLoading:

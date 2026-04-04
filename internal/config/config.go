@@ -12,6 +12,7 @@ type Config struct {
 	LMStudioDir     string   `json:"lmstudio_dir"`      // LM Studio models dir (publisher/model-name layout)
 	RuntimeDir      string   `json:"runtime_dir"`       // where llama.cpp runtimes are stored
 	ProfileDir      string   `json:"profile_dir"`       // where profiles are stored
+	WorkspaceDir    string   `json:"workspace_dir"`     // where workspaces are stored
 	DefaultBackend  string   `json:"default_backend"`   // preferred backend: vulkan, cuda, rocm, cpu
 	Port            int      `json:"port"`              // llama-server port (shared across all profiles)
 }
@@ -68,6 +69,9 @@ func fillDefaults(cfg *Config) {
 	if cfg.ProfileDir == "" {
 		cfg.ProfileDir = d.ProfileDir
 	}
+	if cfg.WorkspaceDir == "" {
+		cfg.WorkspaceDir = d.WorkspaceDir
+	}
 	if cfg.DefaultBackend == "" {
 		cfg.DefaultBackend = d.DefaultBackend
 	}
@@ -85,6 +89,7 @@ func defaults() *Config {
 		ModelDirs:      []string{filepath.Join(dir, "llama-launcher", "models")},
 		RuntimeDir:     filepath.Join(dir, "llama-launcher", "runtimes"),
 		ProfileDir:     filepath.Join(dir, "llama-launcher", "profiles"),
+		WorkspaceDir:   filepath.Join(dir, "llama-launcher", "workspaces"),
 		DefaultBackend: "vulkan",
 		Port:           8080,
 	}
