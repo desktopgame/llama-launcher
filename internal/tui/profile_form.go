@@ -34,10 +34,24 @@ type profileFormValues struct {
 	extraArgs              string
 }
 
+type profileFormStep int
+
+const (
+	profStepModelType profileFormStep = iota
+	profStepMain
+)
+
 type profileFormState struct {
-	form    *huh.Form
-	editing *profile.Profile
-	vals    *profileFormValues // pointer so huh bindings survive copies
+	step          profileFormStep
+	modelTypeForm *huh.Form
+	form          *huh.Form
+	editing       *profile.Profile
+	vals          *profileFormValues // pointer so huh bindings survive copies
+	// data needed to build the main form
+	models   []model.LocalModel
+	runtimes []runtime.InstalledRuntime
+	mmprojs  []string
+	width    int
 }
 
 // --- messages ---
@@ -74,7 +88,6 @@ func newProfileFormState(
 	}
 
 	vals := &profileFormValues{modelType: string(profile.ModelTypeGeneration)}
-	pf := profileFormState{editing: editing, vals: vals}
 
 	// pre-fill if editing
 	if editing != nil {
@@ -102,9 +115,42 @@ func newProfileFormState(
 		vals.extraArgs = editing.ExtraArgs
 	}
 
+	// model type options
+	modelTypeOptions := []huh.Option[string]{
+		huh.NewOption("Generation", string(profile.ModelTypeGeneration)),
+		huh.NewOption("Embedding", string(profile.ModelTypeEmbedding)),
+	}
+
+	pf := profileFormState{
+		step:     profStepModelType,
+		editing:  editing,
+		vals:     vals,
+		models:   models,
+		runtimes: runtimes,
+		mmprojs:  mmprojs,
+		width:    width,
+	}
+
+	pf.modelTypeForm = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Model Type").
+				Options(modelTypeOptions...).
+				Value(&vals.modelType),
+		),
+	).WithWidth(width).WithShowHelp(true)
+
+	return pf
+}
+
+// buildMainForm constructs the main form based on the selected model type.
+func (pf *profileFormState) buildMainForm() {
+	vals := pf.vals
+	width := pf.width
+
 	// model options
-	modelOptions := make([]huh.Option[string], 0, len(models))
-	for _, lm := range models {
+	modelOptions := make([]huh.Option[string], 0, len(pf.models))
+	for _, lm := range pf.models {
 		label := lm.Filename
 		if lm.Source == model.SourceLMStudio {
 			label = fmt.Sprintf("%s (%s/%s)", lm.Filename, lm.Publisher, lm.ModelName)
@@ -113,15 +159,15 @@ func newProfileFormState(
 	}
 
 	// runtime options
-	runtimeOptions := make([]huh.Option[string], 0, len(runtimes))
-	for _, rt := range runtimes {
+	runtimeOptions := make([]huh.Option[string], 0, len(pf.runtimes))
+	for _, rt := range pf.runtimes {
 		label := fmt.Sprintf("%s [%s]", rt.Tag, rt.Backend)
 		runtimeOptions = append(runtimeOptions, huh.NewOption(label, rt.DirName))
 	}
 
 	// mmproj options
 	mmprojOptions := []huh.Option[string]{huh.NewOption("(none)", "")}
-	for _, mp := range mmprojs {
+	for _, mp := range pf.mmprojs {
 		mmprojOptions = append(mmprojOptions, huh.NewOption(filepath.Base(mp), mp))
 	}
 
@@ -135,11 +181,7 @@ func newProfileFormState(
 		return nil
 	}
 
-	// model type options
-	modelTypeOptions := []huh.Option[string]{
-		huh.NewOption("Generation", string(profile.ModelTypeGeneration)),
-		huh.NewOption("Embedding", string(profile.ModelTypeEmbedding)),
-	}
+	isGeneration := vals.modelType != string(profile.ModelTypeEmbedding)
 
 	// group 1: basic info
 	group1 := huh.NewGroup(
@@ -147,10 +189,6 @@ func newProfileFormState(
 			Title("Profile Name").
 			Value(&vals.profileName).
 			Validate(util.ValidateName),
-		huh.NewSelect[string]().
-			Title("Model Type").
-			Options(modelTypeOptions...).
-			Value(&vals.modelType),
 		huh.NewSelect[string]().
 			Title("Model").
 			Options(modelOptions...).
@@ -161,7 +199,7 @@ func newProfileFormState(
 			Value(&vals.runtimeDir),
 	)
 
-	// group 2: parameters (flash attention only for generation)
+	// group 2: parameters
 	var group2Fields []huh.Field
 	group2Fields = append(group2Fields,
 		huh.NewInput().
@@ -173,7 +211,7 @@ func newProfileFormState(
 			Value(&vals.gpuLayers).
 			Validate(numValidator),
 	)
-	if vals.modelType != string(profile.ModelTypeEmbedding) {
+	if isGeneration {
 		group2Fields = append(group2Fields,
 			huh.NewConfirm().
 				Title("Flash Attention").
@@ -209,8 +247,6 @@ func newProfileFormState(
 	)
 
 	pf.form = huh.NewForm(group1, group2, group3).WithWidth(width).WithShowHelp(true)
-
-	return pf
 }
 
 func (pf *profileFormState) toProfile() *profile.Profile {
@@ -246,6 +282,38 @@ func (m Model) updateProfileForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	}
+
+	switch pf.step {
+	case profStepModelType:
+		return m.updateProfileModelType(msg)
+	case profStepMain:
+		return m.updateProfileMain(msg)
+	}
+	return m, nil
+}
+
+func (m Model) updateProfileModelType(msg tea.Msg) (tea.Model, tea.Cmd) {
+	pf := &m.profileForm
+
+	formModel, cmd := pf.modelTypeForm.Update(msg)
+	if f, ok := formModel.(*huh.Form); ok {
+		pf.modelTypeForm = f
+
+		if f.State == huh.StateCompleted {
+			pf.buildMainForm()
+			pf.step = profStepMain
+			return m, pf.form.Init()
+		}
+		if f.State == huh.StateAborted {
+			m.current = viewMenu
+			return m, nil
+		}
+	}
+	return m, cmd
+}
+
+func (m Model) updateProfileMain(msg tea.Msg) (tea.Model, tea.Cmd) {
+	pf := &m.profileForm
 
 	formModel, cmd := pf.form.Update(msg)
 	if f, ok := formModel.(*huh.Form); ok {
@@ -283,8 +351,15 @@ func (m Model) updateProfileForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) viewProfileForm() string {
 	pf := &m.profileForm
-	if pf.form != nil {
-		return pf.form.View()
+	switch pf.step {
+	case profStepModelType:
+		if pf.modelTypeForm != nil {
+			return pf.modelTypeForm.View()
+		}
+	case profStepMain:
+		if pf.form != nil {
+			return pf.form.View()
+		}
 	}
 	return ""
 }
@@ -466,7 +541,7 @@ func (m Model) handleProfileFormDataMsg(msg profileFormDataMsg) (tea.Model, tea.
 
 	m.profileForm = newProfileFormState(msg.editing, msg.models, msg.runtimes, msg.mmprojs, m.width)
 	m.current = viewProfileForm
-	return m, m.profileForm.form.Init()
+	return m, m.profileForm.modelTypeForm.Init()
 }
 
 // --- Commands ---
