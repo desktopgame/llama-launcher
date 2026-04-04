@@ -8,9 +8,9 @@ import (
 
 // Config holds the application settings.
 type Config struct {
-	ModelDir        string `json:"model_dir"`        // user-defined model storage directory
-	RuntimeDir      string `json:"runtime_dir"`      // where llama.cpp runtimes are stored
-	DefaultBackend  string `json:"default_backend"`  // preferred backend: vulkan, cuda, rocm, cpu
+	ModelDirs       []string `json:"model_dirs"`       // user-defined model storage directories
+	RuntimeDir      string   `json:"runtime_dir"`      // where llama.cpp runtimes are stored
+	DefaultBackend  string   `json:"default_backend"`  // preferred backend: vulkan, cuda, rocm, cpu
 }
 
 // DefaultPath returns the default config file path.
@@ -51,6 +51,7 @@ func Save(path string, cfg *Config) error {
 func defaults() *Config {
 	dir, _ := os.UserConfigDir()
 	return &Config{
+		ModelDirs:      []string{filepath.Join(dir, "llama-launcher", "models")},
 		RuntimeDir:     filepath.Join(dir, "llama-launcher", "runtimes"),
 		DefaultBackend: "vulkan",
 	}

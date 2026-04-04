@@ -7,9 +7,11 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/desktopgame/llama-launcher/internal/config"
+	"github.com/desktopgame/llama-launcher/internal/model"
 	"github.com/desktopgame/llama-launcher/internal/runtime"
 )
 
@@ -17,10 +19,17 @@ type view int
 
 const (
 	viewMenu view = iota
+	// runtime views
 	viewRemoteReleases
 	viewBackendSelect
 	viewInstalledRuntimes
-	viewDownloading
+	// model views
+	viewModelSearch
+	viewModelResults
+	viewModelFiles
+	viewLocalModels
+	// shared
+	viewLoading
 )
 
 type menuItem struct {
@@ -33,20 +42,32 @@ func (i menuItem) Description() string { return i.desc }
 func (i menuItem) FilterValue() string { return i.title }
 
 type Model struct {
-	cfg     *config.Config
-	cfgPath string
-	manager *runtime.Manager
-	current view
-	menu    list.Model
-	// release selection
+	cfg          *config.Config
+	cfgPath      string
+	rtManager    *runtime.Manager
+	modelManager *model.Manager
+	current      view
+	prevView     view // for back navigation from nested views
+	menu         list.Model
+	// runtime: release selection
 	releases        list.Model
 	fetchedReleases []runtime.Release
-	// backend selection
+	// runtime: backend selection
 	backends        list.Model
 	selectedRelease *runtime.Release
-	classifiedMap   map[string]runtime.AssetInfo // backend name -> parsed asset
-	// installed runtimes
+	classifiedMap   map[string]runtime.AssetInfo
+	// runtime: installed
 	installed list.Model
+	// model: search
+	searchInput textinput.Model
+	// model: search results
+	modelResults    list.Model
+	fetchedModels   []model.HFModel
+	// model: gguf file selection
+	modelFiles      list.Model
+	fetchedFiles    []model.GGUFFile
+	// model: local models
+	localModels     list.Model
 	// ui
 	spinner spinner.Model
 	status  string
@@ -57,15 +78,23 @@ type Model struct {
 func NewModel() Model {
 	cfgPath := config.DefaultPath()
 	cfg, _ := config.Load(cfgPath)
-	mgr := runtime.NewManager(cfg.RuntimeDir)
+	rtMgr := runtime.NewManager(cfg.RuntimeDir)
+	modelMgr := model.NewManager(cfg.ModelDirs)
 
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
+	ti := textinput.New()
+	ti.Placeholder = "Search GGUF models on HuggingFace..."
+	ti.CharLimit = 100
+	ti.Width = 60
+
 	items := []list.Item{
 		menuItem{title: "Download Runtime", desc: "Download a new llama.cpp version from GitHub"},
 		menuItem{title: "Installed Runtimes", desc: "View and manage installed llama.cpp versions"},
+		menuItem{title: "Search Models", desc: "Search and download GGUF models from HuggingFace"},
+		menuItem{title: "Local Models", desc: "View GGUF models on disk"},
 	}
 
 	menuList := list.New(items, list.NewDefaultDelegate(), 0, 0)
@@ -73,53 +102,69 @@ func NewModel() Model {
 	menuList.SetShowStatusBar(false)
 
 	return Model{
-		cfg:     cfg,
-		cfgPath: cfgPath,
-		manager: mgr,
-		current: viewMenu,
-		menu:    menuList,
-		spinner: s,
+		cfg:          cfg,
+		cfgPath:      cfgPath,
+		rtManager:    rtMgr,
+		modelManager: modelMgr,
+		current:      viewMenu,
+		menu:         menuList,
+		searchInput:  ti,
+		spinner:      s,
 	}
 }
 
-// messages
+// --- messages ---
+
 type releasesMsg struct {
 	releases []runtime.Release
 	err      error
 }
-
-type downloadMsg struct {
+type runtimeDownloadMsg struct {
 	dirName string
 	err     error
 }
-
-type installedMsg struct {
+type installedRuntimesMsg struct {
 	runtimes []runtime.InstalledRuntime
 	err      error
 }
+type modelSearchMsg struct {
+	models []model.HFModel
+	err    error
+}
+type modelFilesMsg struct {
+	files []model.GGUFFile
+	err   error
+}
+type modelDownloadMsg struct {
+	filename string
+	err      error
+}
+type localModelsMsg struct {
+	models []model.LocalModel
+	err    error
+}
+
+// --- Init ---
 
 func (m Model) Init() tea.Cmd {
 	return m.spinner.Tick
 }
 
+// --- Update ---
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// handle text input when searching
+	if m.current == viewModelSearch {
+		return m.updateModelSearch(msg)
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "q", "esc":
-			switch m.current {
-			case viewMenu:
-				return m, tea.Quit
-			case viewBackendSelect:
-				m.current = viewRemoteReleases
-				return m, nil
-			default:
-				m.current = viewMenu
-				m.status = ""
-				return m, nil
-			}
+			return m.handleBack()
 		case "enter":
 			return m.handleEnter()
 		}
@@ -133,51 +178,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	// runtime messages
 	case releasesMsg:
-		if msg.err != nil {
-			m.status = fmt.Sprintf("Error: %v", msg.err)
-			m.current = viewMenu
-			return m, nil
-		}
-		m.fetchedReleases = msg.releases
-		items := make([]list.Item, len(msg.releases))
-		for i, r := range msg.releases {
-			items[i] = menuItem{
-				title: r.TagName,
-				desc:  fmt.Sprintf("%s — %d assets", r.PublishedAt.Format("2006-01-02"), len(r.Assets)),
-			}
-		}
-		m.releases = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
-		m.releases.Title = "Select a release"
-		m.current = viewRemoteReleases
-		return m, nil
+		return m.handleReleasesMsg(msg)
+	case runtimeDownloadMsg:
+		return m.handleRuntimeDownloadMsg(msg)
+	case installedRuntimesMsg:
+		return m.handleInstalledRuntimesMsg(msg)
 
-	case downloadMsg:
-		if msg.err != nil {
-			m.status = fmt.Sprintf("Download failed: %v", msg.err)
-		} else {
-			m.status = fmt.Sprintf("Downloaded %s successfully", msg.dirName)
-		}
-		m.current = viewMenu
-		return m, nil
-
-	case installedMsg:
-		if msg.err != nil {
-			m.status = fmt.Sprintf("Error: %v", msg.err)
-			m.current = viewMenu
-			return m, nil
-		}
-		items := make([]list.Item, len(msg.runtimes))
-		for i, r := range msg.runtimes {
-			items[i] = menuItem{
-				title: r.DirName,
-				desc:  fmt.Sprintf("%s [%s] — Installed: %s", r.Tag, r.Backend, r.Installed.Format("2006-01-02 15:04")),
-			}
-		}
-		m.installed = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
-		m.installed.Title = "Installed Runtimes (enter to delete, q to back)"
-		m.current = viewInstalledRuntimes
-		return m, nil
+	// model messages
+	case modelSearchMsg:
+		return m.handleModelSearchMsg(msg)
+	case modelFilesMsg:
+		return m.handleModelFilesMsg(msg)
+	case modelDownloadMsg:
+		return m.handleModelDownloadMsg(msg)
+	case localModelsMsg:
+		return m.handleLocalModelsMsg(msg)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -196,109 +213,350 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.backends, cmd = m.backends.Update(msg)
 	case viewInstalledRuntimes:
 		m.installed, cmd = m.installed.Update(msg)
+	case viewModelResults:
+		m.modelResults, cmd = m.modelResults.Update(msg)
+	case viewModelFiles:
+		m.modelFiles, cmd = m.modelFiles.Update(msg)
+	case viewLocalModels:
+		m.localModels, cmd = m.localModels.Update(msg)
 	}
 	return m, cmd
 }
 
-func (m Model) handleEnter() (tea.Model, tea.Cmd) {
+func (m Model) handleBack() (tea.Model, tea.Cmd) {
 	switch m.current {
 	case viewMenu:
-		i, ok := m.menu.SelectedItem().(menuItem)
-		if !ok {
-			return m, nil
-		}
-		switch i.title {
-		case "Download Runtime":
-			m.current = viewDownloading
-			m.status = "Fetching releases..."
-			return m, tea.Batch(m.spinner.Tick, fetchReleases())
-		case "Installed Runtimes":
-			m.current = viewDownloading
-			m.status = "Loading..."
-			return m, tea.Batch(m.spinner.Tick, m.listInstalled())
-		}
-
-	case viewRemoteReleases:
-		idx := m.releases.Index()
-		if idx < 0 || idx >= len(m.fetchedReleases) {
-			return m, nil
-		}
-		release := m.fetchedReleases[idx]
-		m.selectedRelease = &release
-		classified := runtime.ClassifyAssets(release.Assets, "win", "x64")
-		if len(classified) == 0 {
-			m.status = "No compatible assets found for this release"
-			m.current = viewMenu
-			return m, nil
-		}
-		m.classifiedMap = classified
-
-		// build backend list, default backend first
-		var items []list.Item
-		backendNames := make([]string, 0, len(classified))
-		for name := range classified {
-			backendNames = append(backendNames, name)
-		}
-		sort.Strings(backendNames)
-
-		// move default backend to top
-		for i, name := range backendNames {
-			if name == m.cfg.DefaultBackend {
-				backendNames = append(backendNames[:i], backendNames[i+1:]...)
-				backendNames = append([]string{name}, backendNames...)
-				break
-			}
-		}
-
-		for _, name := range backendNames {
-			info := classified[name]
-			suffix := ""
-			if name == m.cfg.DefaultBackend {
-				suffix = " (default)"
-			}
-			items = append(items, menuItem{
-				title: name + suffix,
-				desc:  fmt.Sprintf("%s (%.1f MB)", info.Asset.Name, float64(info.Asset.Size)/(1024*1024)),
-			})
-		}
-
-		m.backends = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
-		m.backends.Title = fmt.Sprintf("Select backend for %s", release.TagName)
-		m.current = viewBackendSelect
-		return m, nil
-
+		return m, tea.Quit
 	case viewBackendSelect:
-		i, ok := m.backends.SelectedItem().(menuItem)
-		if !ok || m.selectedRelease == nil {
-			return m, nil
-		}
-		// strip " (default)" suffix
-		backendName := strings.TrimSuffix(i.title, " (default)")
-		info, ok := m.classifiedMap[backendName]
-		if !ok {
-			return m, nil
-		}
-		tag := m.selectedRelease.TagName
-		dirName := runtime.RuntimeDirName(tag, backendName)
-		m.current = viewDownloading
-		m.status = fmt.Sprintf("Downloading %s...", dirName)
-		return m, tea.Batch(m.spinner.Tick, m.download(tag, backendName, info.Asset))
-
-	case viewInstalledRuntimes:
-		i, ok := m.installed.SelectedItem().(menuItem)
-		if !ok {
-			return m, nil
-		}
-		if err := m.manager.Remove(i.title); err != nil {
-			m.status = fmt.Sprintf("Failed to remove: %v", err)
-		} else {
-			m.status = fmt.Sprintf("Removed %s", i.title)
-		}
+		m.current = viewRemoteReleases
+	case viewModelFiles:
+		m.current = viewModelResults
+	default:
 		m.current = viewMenu
-		return m, nil
+		m.status = ""
 	}
 	return m, nil
 }
+
+// --- Enter handlers ---
+
+func (m Model) handleEnter() (tea.Model, tea.Cmd) {
+	switch m.current {
+	case viewMenu:
+		return m.handleMenuEnter()
+	case viewRemoteReleases:
+		return m.handleReleaseEnter()
+	case viewBackendSelect:
+		return m.handleBackendEnter()
+	case viewInstalledRuntimes:
+		return m.handleInstalledEnter()
+	case viewModelResults:
+		return m.handleModelResultEnter()
+	case viewModelFiles:
+		return m.handleModelFileEnter()
+	case viewLocalModels:
+		return m.handleLocalModelEnter()
+	}
+	return m, nil
+}
+
+func (m Model) handleMenuEnter() (tea.Model, tea.Cmd) {
+	i, ok := m.menu.SelectedItem().(menuItem)
+	if !ok {
+		return m, nil
+	}
+	switch i.title {
+	case "Download Runtime":
+		m.current = viewLoading
+		m.status = "Fetching releases..."
+		return m, tea.Batch(m.spinner.Tick, fetchReleasesCmd())
+	case "Installed Runtimes":
+		m.current = viewLoading
+		m.status = "Loading..."
+		return m, tea.Batch(m.spinner.Tick, listInstalledCmd(m.rtManager))
+	case "Search Models":
+		m.searchInput.Focus()
+		m.current = viewModelSearch
+		return m, textinput.Blink
+	case "Local Models":
+		m.current = viewLoading
+		m.status = "Scanning model directories..."
+		return m, tea.Batch(m.spinner.Tick, listLocalModelsCmd(m.modelManager))
+	}
+	return m, nil
+}
+
+func (m Model) handleReleaseEnter() (tea.Model, tea.Cmd) {
+	idx := m.releases.Index()
+	if idx < 0 || idx >= len(m.fetchedReleases) {
+		return m, nil
+	}
+	release := m.fetchedReleases[idx]
+	m.selectedRelease = &release
+	classified := runtime.ClassifyAssets(release.Assets, "win", "x64")
+	if len(classified) == 0 {
+		m.status = "No compatible assets found for this release"
+		m.current = viewMenu
+		return m, nil
+	}
+	m.classifiedMap = classified
+
+	backendNames := make([]string, 0, len(classified))
+	for name := range classified {
+		backendNames = append(backendNames, name)
+	}
+	sort.Strings(backendNames)
+
+	// move default backend to top
+	for i, name := range backendNames {
+		if name == m.cfg.DefaultBackend {
+			backendNames = append(backendNames[:i], backendNames[i+1:]...)
+			backendNames = append([]string{name}, backendNames...)
+			break
+		}
+	}
+
+	var items []list.Item
+	for _, name := range backendNames {
+		info := classified[name]
+		suffix := ""
+		if name == m.cfg.DefaultBackend {
+			suffix = " (default)"
+		}
+		items = append(items, menuItem{
+			title: name + suffix,
+			desc:  fmt.Sprintf("%s (%.1f MB)", info.Asset.Name, float64(info.Asset.Size)/(1024*1024)),
+		})
+	}
+
+	m.backends = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
+	m.backends.Title = fmt.Sprintf("Select backend for %s", release.TagName)
+	m.current = viewBackendSelect
+	return m, nil
+}
+
+func (m Model) handleBackendEnter() (tea.Model, tea.Cmd) {
+	i, ok := m.backends.SelectedItem().(menuItem)
+	if !ok || m.selectedRelease == nil {
+		return m, nil
+	}
+	backendName := strings.TrimSuffix(i.title, " (default)")
+	info, ok := m.classifiedMap[backendName]
+	if !ok {
+		return m, nil
+	}
+	tag := m.selectedRelease.TagName
+	dirName := runtime.RuntimeDirName(tag, backendName)
+	m.current = viewLoading
+	m.status = fmt.Sprintf("Downloading %s...", dirName)
+	return m, tea.Batch(m.spinner.Tick, downloadRuntimeCmd(m.rtManager, tag, backendName, info.Asset))
+}
+
+func (m Model) handleInstalledEnter() (tea.Model, tea.Cmd) {
+	i, ok := m.installed.SelectedItem().(menuItem)
+	if !ok {
+		return m, nil
+	}
+	if err := m.rtManager.Remove(i.title); err != nil {
+		m.status = fmt.Sprintf("Failed to remove: %v", err)
+	} else {
+		m.status = fmt.Sprintf("Removed %s", i.title)
+	}
+	m.current = viewMenu
+	return m, nil
+}
+
+// --- Model search ---
+
+func (m Model) updateModelSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			m.current = viewMenu
+			return m, nil
+		case "enter":
+			query := m.searchInput.Value()
+			if query == "" {
+				return m, nil
+			}
+			m.current = viewLoading
+			m.status = fmt.Sprintf("Searching \"%s\"...", query)
+			return m, tea.Batch(m.spinner.Tick, searchModelsCmd(query))
+		}
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	}
+
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) handleModelResultEnter() (tea.Model, tea.Cmd) {
+	idx := m.modelResults.Index()
+	if idx < 0 || idx >= len(m.fetchedModels) {
+		return m, nil
+	}
+	hfModel := m.fetchedModels[idx]
+	m.current = viewLoading
+	m.status = fmt.Sprintf("Fetching files for %s...", hfModel.ID)
+	return m, tea.Batch(m.spinner.Tick, fetchModelFilesCmd(hfModel.ID))
+}
+
+func (m Model) handleModelFileEnter() (tea.Model, tea.Cmd) {
+	idx := m.modelFiles.Index()
+	if idx < 0 || idx >= len(m.fetchedFiles) {
+		return m, nil
+	}
+	file := m.fetchedFiles[idx]
+	destDir := m.cfg.ModelDirs[0] // download to first configured directory
+	m.current = viewLoading
+	m.status = fmt.Sprintf("Downloading %s...", file.Filename)
+	return m, tea.Batch(m.spinner.Tick, downloadModelCmd(m.modelManager, file, destDir))
+}
+
+func (m Model) handleLocalModelEnter() (tea.Model, tea.Cmd) {
+	// TODO: could add delete confirmation
+	m.current = viewMenu
+	return m, nil
+}
+
+// --- Message handlers ---
+
+func (m Model) handleReleasesMsg(msg releasesMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.status = fmt.Sprintf("Error: %v", msg.err)
+		m.current = viewMenu
+		return m, nil
+	}
+	m.fetchedReleases = msg.releases
+	items := make([]list.Item, len(msg.releases))
+	for i, r := range msg.releases {
+		items[i] = menuItem{
+			title: r.TagName,
+			desc:  fmt.Sprintf("%s — %d assets", r.PublishedAt.Format("2006-01-02"), len(r.Assets)),
+		}
+	}
+	m.releases = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
+	m.releases.Title = "Select a release"
+	m.current = viewRemoteReleases
+	return m, nil
+}
+
+func (m Model) handleRuntimeDownloadMsg(msg runtimeDownloadMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.status = fmt.Sprintf("Download failed: %v", msg.err)
+	} else {
+		m.status = fmt.Sprintf("Downloaded %s successfully", msg.dirName)
+	}
+	m.current = viewMenu
+	return m, nil
+}
+
+func (m Model) handleInstalledRuntimesMsg(msg installedRuntimesMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.status = fmt.Sprintf("Error: %v", msg.err)
+		m.current = viewMenu
+		return m, nil
+	}
+	items := make([]list.Item, len(msg.runtimes))
+	for i, r := range msg.runtimes {
+		items[i] = menuItem{
+			title: r.DirName,
+			desc:  fmt.Sprintf("%s [%s] — Installed: %s", r.Tag, r.Backend, r.Installed.Format("2006-01-02 15:04")),
+		}
+	}
+	m.installed = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
+	m.installed.Title = "Installed Runtimes (enter to delete, q to back)"
+	m.current = viewInstalledRuntimes
+	return m, nil
+}
+
+func (m Model) handleModelSearchMsg(msg modelSearchMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.status = fmt.Sprintf("Error: %v", msg.err)
+		m.current = viewMenu
+		return m, nil
+	}
+	m.fetchedModels = msg.models
+	items := make([]list.Item, len(msg.models))
+	for i, hm := range msg.models {
+		items[i] = menuItem{
+			title: hm.ID,
+			desc:  fmt.Sprintf("Downloads: %d  Likes: %d", hm.Downloads, hm.Likes),
+		}
+	}
+	m.modelResults = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
+	m.modelResults.Title = "Search Results (enter to view files, q to back)"
+	m.current = viewModelResults
+	return m, nil
+}
+
+func (m Model) handleModelFilesMsg(msg modelFilesMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.status = fmt.Sprintf("Error: %v", msg.err)
+		m.current = viewModelResults
+		return m, nil
+	}
+	if len(msg.files) == 0 {
+		m.status = "No GGUF files found in this repository"
+		m.current = viewModelResults
+		return m, nil
+	}
+	m.fetchedFiles = msg.files
+	items := make([]list.Item, len(msg.files))
+	for i, f := range msg.files {
+		items[i] = menuItem{
+			title: f.Filename,
+			desc:  f.RepoPath,
+		}
+	}
+	m.modelFiles = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
+	m.modelFiles.Title = "Select a GGUF file to download (q to back)"
+	m.current = viewModelFiles
+	return m, nil
+}
+
+func (m Model) handleModelDownloadMsg(msg modelDownloadMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.status = fmt.Sprintf("Download failed: %v", msg.err)
+	} else {
+		m.status = fmt.Sprintf("Downloaded %s successfully", msg.filename)
+	}
+	m.current = viewMenu
+	return m, nil
+}
+
+func (m Model) handleLocalModelsMsg(msg localModelsMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.status = fmt.Sprintf("Error: %v", msg.err)
+		m.current = viewMenu
+		return m, nil
+	}
+	if len(msg.models) == 0 {
+		m.status = "No GGUF models found in configured directories"
+		m.current = viewMenu
+		return m, nil
+	}
+	items := make([]list.Item, len(msg.models))
+	for i, lm := range msg.models {
+		items[i] = menuItem{
+			title: lm.Filename,
+			desc:  fmt.Sprintf("%.1f GB — %s", float64(lm.Size)/(1024*1024*1024), lm.Dir),
+		}
+	}
+	m.localModels = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
+	m.localModels.Title = "Local Models (q to back)"
+	m.current = viewLocalModels
+	return m, nil
+}
+
+// --- View ---
 
 func (m Model) View() string {
 	var b strings.Builder
@@ -312,7 +570,15 @@ func (m Model) View() string {
 		b.WriteString(m.backends.View())
 	case viewInstalledRuntimes:
 		b.WriteString(m.installed.View())
-	case viewDownloading:
+	case viewModelSearch:
+		b.WriteString(fmt.Sprintf("\n  Search GGUF Models\n\n  %s\n\n  Press Enter to search, Esc to cancel\n", m.searchInput.View()))
+	case viewModelResults:
+		b.WriteString(m.modelResults.View())
+	case viewModelFiles:
+		b.WriteString(m.modelFiles.View())
+	case viewLocalModels:
+		b.WriteString(m.localModels.View())
+	case viewLoading:
 		b.WriteString(fmt.Sprintf("\n  %s %s\n", m.spinner.View(), m.status))
 	}
 
@@ -324,26 +590,54 @@ func (m Model) View() string {
 	return b.String()
 }
 
-// commands
+// --- Commands ---
 
-func fetchReleases() tea.Cmd {
+func fetchReleasesCmd() tea.Cmd {
 	return func() tea.Msg {
 		releases, err := runtime.FetchReleases(20)
 		return releasesMsg{releases: releases, err: err}
 	}
 }
 
-func (m Model) download(tag, backend string, asset runtime.Asset) tea.Cmd {
+func downloadRuntimeCmd(mgr *runtime.Manager, tag, backend string, asset runtime.Asset) tea.Cmd {
 	return func() tea.Msg {
 		dirName := runtime.RuntimeDirName(tag, backend)
-		err := m.manager.Download(tag, backend, asset, nil)
-		return downloadMsg{dirName: dirName, err: err}
+		err := mgr.Download(tag, backend, asset, nil)
+		return runtimeDownloadMsg{dirName: dirName, err: err}
 	}
 }
 
-func (m Model) listInstalled() tea.Cmd {
+func listInstalledCmd(mgr *runtime.Manager) tea.Cmd {
 	return func() tea.Msg {
-		runtimes, err := m.manager.List()
-		return installedMsg{runtimes: runtimes, err: err}
+		runtimes, err := mgr.List()
+		return installedRuntimesMsg{runtimes: runtimes, err: err}
+	}
+}
+
+func searchModelsCmd(query string) tea.Cmd {
+	return func() tea.Msg {
+		models, err := model.SearchGGUF(query, 20)
+		return modelSearchMsg{models: models, err: err}
+	}
+}
+
+func fetchModelFilesCmd(repoID string) tea.Cmd {
+	return func() tea.Msg {
+		files, err := model.FetchGGUFFiles(repoID)
+		return modelFilesMsg{files: files, err: err}
+	}
+}
+
+func downloadModelCmd(mgr *model.Manager, file model.GGUFFile, destDir string) tea.Cmd {
+	return func() tea.Msg {
+		err := mgr.Download(file, destDir, nil)
+		return modelDownloadMsg{filename: file.Filename, err: err}
+	}
+}
+
+func listLocalModelsCmd(mgr *model.Manager) tea.Cmd {
+	return func() tea.Msg {
+		models, err := mgr.List()
+		return localModelsMsg{models: models, err: err}
 	}
 }
