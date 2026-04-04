@@ -10,59 +10,161 @@ import (
 	"time"
 )
 
-// Manager handles local GGUF model files across multiple directories.
+// Source indicates where a local model was found.
+type Source string
+
+const (
+	SourceUser     Source = "user"      // from model_dirs
+	SourceLMStudio Source = "lmstudio"  // from lmstudio_dir
+)
+
+// Manager handles local GGUF model files across multiple sources.
 type Manager struct {
-	dirs []string
+	dirs        []string // user model directories (recursive scan)
+	lmStudioDir string   // LM Studio directory (publisher/model-name layout)
 }
 
 // LocalModel represents a GGUF file found on disk.
 type LocalModel struct {
-	Filename string // e.g. "Llama-2-7B-Q4_K_M.gguf"
-	Path     string // full path
-	Dir      string // which model_dir it's in
-	Size     int64
+	Filename  string // e.g. "Llama-2-7B-Q4_K_M.gguf"
+	Path      string // full path
+	Dir       string // parent directory
+	Size      int64
+	Source    Source  // where it was found
+	Publisher string // LM Studio only: e.g. "TheBloke"
+	ModelName string // LM Studio only: e.g. "Llama-2-7B-GGUF"
 }
 
-// NewManager creates a Manager that scans the given directories.
-func NewManager(dirs []string) *Manager {
-	return &Manager{dirs: dirs}
+// DisplayName returns a human-readable name for the model.
+func (m LocalModel) DisplayName() string {
+	if m.Publisher != "" {
+		return fmt.Sprintf("%s/%s/%s", m.Publisher, m.ModelName, m.Filename)
+	}
+	return m.Filename
 }
 
-// Dirs returns the configured model directories.
-func (m *Manager) Dirs() []string {
-	return m.dirs
+// NewManager creates a Manager with user directories and optional LM Studio directory.
+func NewManager(dirs []string, lmStudioDir string) *Manager {
+	return &Manager{dirs: dirs, lmStudioDir: lmStudioDir}
 }
 
-// List returns all GGUF files found across all configured directories.
+// List returns all GGUF files found across all sources.
 func (m *Manager) List() ([]LocalModel, error) {
 	var models []LocalModel
+
+	// scan user directories (recursive)
 	for _, dir := range m.dirs {
-		entries, err := os.ReadDir(dir)
+		found, err := scanRecursive(dir, SourceUser)
+		if err != nil {
+			return nil, err
+		}
+		models = append(models, found...)
+	}
+
+	// scan LM Studio directory
+	if m.lmStudioDir != "" {
+		found, err := scanLMStudio(m.lmStudioDir)
+		if err != nil {
+			return nil, err
+		}
+		models = append(models, found...)
+	}
+
+	return models, nil
+}
+
+// scanRecursive walks a directory tree and returns all GGUF files.
+func scanRecursive(root string, source Source) ([]LocalModel, error) {
+	var models []LocalModel
+
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
-				continue
+				return nil
 			}
-			return nil, fmt.Errorf("failed to read %s: %w", dir, err)
+			return err
 		}
-		for _, e := range entries {
-			if e.IsDir() {
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(strings.ToLower(d.Name()), ".gguf") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		models = append(models, LocalModel{
+			Filename: d.Name(),
+			Path:     path,
+			Dir:      filepath.Dir(path),
+			Size:     info.Size(),
+			Source:   source,
+		})
+		return nil
+	})
+
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to scan %s: %w", root, err)
+	}
+	return models, nil
+}
+
+// scanLMStudio scans the LM Studio models directory.
+// Expected layout: {lmStudioDir}/{publisher}/{model-name}/*.gguf
+func scanLMStudio(root string) ([]LocalModel, error) {
+	var models []LocalModel
+
+	publishers, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read LM Studio dir: %w", err)
+	}
+
+	for _, pub := range publishers {
+		if !pub.IsDir() {
+			continue
+		}
+		pubDir := filepath.Join(root, pub.Name())
+		modelDirs, err := os.ReadDir(pubDir)
+		if err != nil {
+			continue
+		}
+		for _, md := range modelDirs {
+			if !md.IsDir() {
 				continue
 			}
-			if !strings.HasSuffix(strings.ToLower(e.Name()), ".gguf") {
-				continue
-			}
-			info, err := e.Info()
+			modelDir := filepath.Join(pubDir, md.Name())
+			files, err := os.ReadDir(modelDir)
 			if err != nil {
 				continue
 			}
-			models = append(models, LocalModel{
-				Filename: e.Name(),
-				Path:     filepath.Join(dir, e.Name()),
-				Dir:      dir,
-				Size:     info.Size(),
-			})
+			for _, f := range files {
+				if f.IsDir() {
+					continue
+				}
+				if !strings.HasSuffix(strings.ToLower(f.Name()), ".gguf") {
+					continue
+				}
+				info, err := f.Info()
+				if err != nil {
+					continue
+				}
+				models = append(models, LocalModel{
+					Filename:  f.Name(),
+					Path:      filepath.Join(modelDir, f.Name()),
+					Dir:       modelDir,
+					Size:      info.Size(),
+					Source:    SourceLMStudio,
+					Publisher: pub.Name(),
+					ModelName: md.Name(),
+				})
+			}
 		}
 	}
+
 	return models, nil
 }
 

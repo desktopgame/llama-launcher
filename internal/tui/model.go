@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -28,6 +30,8 @@ const (
 	viewModelResults
 	viewModelFiles
 	viewLocalModels
+	// settings
+	viewSettings
 	// shared
 	viewLoading
 )
@@ -79,7 +83,7 @@ func NewModel() Model {
 	cfgPath := config.DefaultPath()
 	cfg, _ := config.Load(cfgPath)
 	rtMgr := runtime.NewManager(cfg.RuntimeDir)
-	modelMgr := model.NewManager(cfg.ModelDirs)
+	modelMgr := model.NewManager(cfg.ModelDirs, cfg.LMStudioDir)
 
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -95,6 +99,7 @@ func NewModel() Model {
 		menuItem{title: "Installed Runtimes", desc: "View and manage installed llama.cpp versions"},
 		menuItem{title: "Search Models", desc: "Search and download GGUF models from HuggingFace"},
 		menuItem{title: "Local Models", desc: "View GGUF models on disk"},
+		menuItem{title: "Settings", desc: "View current settings and open config file"},
 	}
 
 	menuList := list.New(items, list.NewDefaultDelegate(), 0, 0)
@@ -186,6 +191,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case installedRuntimesMsg:
 		return m.handleInstalledRuntimesMsg(msg)
 
+	// settings messages
+	case openFolderMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Failed to open folder: %v", msg.err)
+		} else {
+			m.status = "Opened config folder in explorer"
+		}
+		return m, nil
+
 	// model messages
 	case modelSearchMsg:
 		return m.handleModelSearchMsg(msg)
@@ -256,6 +270,8 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m.handleModelFileEnter()
 	case viewLocalModels:
 		return m.handleLocalModelEnter()
+	case viewSettings:
+		return m.handleSettingsEnter()
 	}
 	return m, nil
 }
@@ -282,6 +298,9 @@ func (m Model) handleMenuEnter() (tea.Model, tea.Cmd) {
 		m.current = viewLoading
 		m.status = "Scanning model directories..."
 		return m, tea.Batch(m.spinner.Tick, listLocalModelsCmd(m.modelManager))
+	case "Settings":
+		m.current = viewSettings
+		return m, nil
 	}
 	return m, nil
 }
@@ -426,6 +445,21 @@ func (m Model) handleLocalModelEnter() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+type openFolderMsg struct{ err error }
+
+func (m Model) handleSettingsEnter() (tea.Model, tea.Cmd) {
+	cfgPath := m.cfgPath
+	cfg := m.cfg
+	return m, func() tea.Msg {
+		// create default config if it doesn't exist
+		if err := config.EnsureExists(cfgPath, cfg); err != nil {
+			return openFolderMsg{err: err}
+		}
+		err := exec.Command("explorer", filepath.Dir(cfgPath)).Start()
+		return openFolderMsg{err: err}
+	}
+}
+
 // --- Message handlers ---
 
 func (m Model) handleReleasesMsg(msg releasesMsg) (tea.Model, tea.Cmd) {
@@ -545,9 +579,16 @@ func (m Model) handleLocalModelsMsg(msg localModelsMsg) (tea.Model, tea.Cmd) {
 	}
 	items := make([]list.Item, len(msg.models))
 	for i, lm := range msg.models {
+		sizeGB := float64(lm.Size) / (1024 * 1024 * 1024)
+		var desc string
+		if lm.Source == model.SourceLMStudio {
+			desc = fmt.Sprintf("%.1f GB — [lmstudio] %s/%s", sizeGB, lm.Publisher, lm.ModelName)
+		} else {
+			desc = fmt.Sprintf("%.1f GB — %s", sizeGB, lm.Dir)
+		}
 		items[i] = menuItem{
 			title: lm.Filename,
-			desc:  fmt.Sprintf("%.1f GB — %s", float64(lm.Size)/(1024*1024*1024), lm.Dir),
+			desc:  desc,
 		}
 	}
 	m.localModels = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
@@ -578,6 +619,8 @@ func (m Model) View() string {
 		b.WriteString(m.modelFiles.View())
 	case viewLocalModels:
 		b.WriteString(m.localModels.View())
+	case viewSettings:
+		b.WriteString(m.viewSettings())
 	case viewLoading:
 		b.WriteString(fmt.Sprintf("\n  %s %s\n", m.spinner.View(), m.status))
 	}
@@ -585,6 +628,63 @@ func (m Model) View() string {
 	if m.status != "" && m.current == viewMenu {
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginLeft(2)
 		b.WriteString("\n" + style.Render(m.status))
+	}
+
+	return b.String()
+}
+
+func (m Model) viewSettings() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).MarginLeft(2).MarginTop(1)
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginLeft(4)
+	valueStyle := lipgloss.NewStyle().MarginLeft(6)
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginLeft(2).MarginTop(1)
+
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Settings"))
+	b.WriteString("\n\n")
+
+	b.WriteString(labelStyle.Render("Config file:"))
+	b.WriteString("\n")
+	b.WriteString(valueStyle.Render(m.cfgPath))
+	b.WriteString("\n\n")
+
+	b.WriteString(labelStyle.Render("Runtime directory:"))
+	b.WriteString("\n")
+	b.WriteString(valueStyle.Render(m.cfg.RuntimeDir))
+	b.WriteString("\n\n")
+
+	b.WriteString(labelStyle.Render("Default backend:"))
+	b.WriteString("\n")
+	b.WriteString(valueStyle.Render(m.cfg.DefaultBackend))
+	b.WriteString("\n\n")
+
+	b.WriteString(labelStyle.Render("Model directories:"))
+	b.WriteString("\n")
+	if len(m.cfg.ModelDirs) == 0 {
+		b.WriteString(valueStyle.Render("(none)"))
+	} else {
+		for _, d := range m.cfg.ModelDirs {
+			b.WriteString(valueStyle.Render("- " + d))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n")
+
+	b.WriteString(labelStyle.Render("LM Studio directory:"))
+	b.WriteString("\n")
+	if m.cfg.LMStudioDir == "" {
+		b.WriteString(valueStyle.Render("(not set)"))
+	} else {
+		b.WriteString(valueStyle.Render(m.cfg.LMStudioDir))
+	}
+	b.WriteString("\n")
+
+	b.WriteString(hintStyle.Render("Press Enter to open config folder  |  q to back"))
+
+	if m.status != "" {
+		statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).MarginLeft(2)
+		b.WriteString("\n")
+		b.WriteString(statusStyle.Render(m.status))
 	}
 
 	return b.String()

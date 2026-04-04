@@ -8,9 +8,10 @@ import (
 
 // Config holds the application settings.
 type Config struct {
-	ModelDirs       []string `json:"model_dirs"`       // user-defined model storage directories
-	RuntimeDir      string   `json:"runtime_dir"`      // where llama.cpp runtimes are stored
-	DefaultBackend  string   `json:"default_backend"`  // preferred backend: vulkan, cuda, rocm, cpu
+	ModelDirs       []string `json:"model_dirs"`        // user-defined model storage directories (recursive scan)
+	LMStudioDir     string   `json:"lmstudio_dir"`      // LM Studio models dir (publisher/model-name layout)
+	RuntimeDir      string   `json:"runtime_dir"`       // where llama.cpp runtimes are stored
+	DefaultBackend  string   `json:"default_backend"`   // preferred backend: vulkan, cuda, rocm, cpu
 }
 
 // DefaultPath returns the default config file path.
@@ -46,6 +47,14 @@ func Save(path string, cfg *Config) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+// EnsureExists writes the config to path if the file doesn't already exist.
+func EnsureExists(path string, cfg *Config) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil // already exists
+	}
+	return Save(path, cfg)
 }
 
 func defaults() *Config {
