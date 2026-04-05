@@ -34,6 +34,9 @@ func GenerateConfig(
 	// models section
 	b.WriteString("models:\n")
 
+	var residentMembers []string
+	var onDemandMembers []string
+
 	startPort := port + 1
 	for i, entry := range ws.Entries {
 		prof, err := profMgr.Load(entry.ProfileName)
@@ -56,26 +59,38 @@ func GenerateConfig(
 		}
 		cmd := fmt.Sprintf("%s %s", serverPathNorm, strings.Join(argsNorm, " "))
 
-		group := groupOnDemand
 		if entry.Resident {
-			group = groupResident
+			residentMembers = append(residentMembers, entry.ProfileName)
+		} else {
+			onDemandMembers = append(onDemandMembers, entry.ProfileName)
 		}
 
 		fmt.Fprintf(&b, "  \"%s\":\n", entry.ProfileName)
 		fmt.Fprintf(&b, "    cmd: \"%s\"\n", strings.ReplaceAll(cmd, "\"", "\\\""))
 		fmt.Fprintf(&b, "    proxy: \"http://127.0.0.1:%d\"\n", backendPort)
 		fmt.Fprintf(&b, "    ttl: %d\n", entry.TTL)
-		fmt.Fprintf(&b, "    group: %s\n", group)
 	}
 
-	// groups section
+	// groups section — use members to assign models to groups
 	b.WriteString("\ngroups:\n")
-	fmt.Fprintf(&b, "  %s:\n", groupResident)
-	b.WriteString("    swap: false\n")
-	b.WriteString("    exclusive: false\n")
-	b.WriteString("    persistent: true\n")
-	fmt.Fprintf(&b, "  %s:\n", groupOnDemand)
-	b.WriteString("    swap: true\n")
+	if len(residentMembers) > 0 {
+		fmt.Fprintf(&b, "  %s:\n", groupResident)
+		b.WriteString("    swap: false\n")
+		b.WriteString("    exclusive: false\n")
+		b.WriteString("    persistent: true\n")
+		b.WriteString("    members:\n")
+		for _, name := range residentMembers {
+			fmt.Fprintf(&b, "      - \"%s\"\n", name)
+		}
+	}
+	if len(onDemandMembers) > 0 {
+		fmt.Fprintf(&b, "  %s:\n", groupOnDemand)
+		b.WriteString("    swap: true\n")
+		b.WriteString("    members:\n")
+		for _, name := range onDemandMembers {
+			fmt.Fprintf(&b, "      - \"%s\"\n", name)
+		}
+	}
 
 	// write to temp file
 	tmpDir, err := os.MkdirTemp("", "llama-launcher-*")
