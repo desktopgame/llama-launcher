@@ -20,6 +20,12 @@ const (
 	SourceLMStudio Source = "lmstudio" // from lmstudio_dir
 )
 
+// LocalMMProj represents a mmproj GGUF file found on disk.
+type LocalMMProj struct {
+	Path    string // full path
+	RelPath string // relative path from scan root (for display)
+}
+
 // Manager handles local GGUF model files across multiple sources.
 type Manager struct {
 	dirs        []string // user model directories (recursive scan)
@@ -51,7 +57,7 @@ func NewManager(dirs []string, lmStudioDir string) *Manager {
 }
 
 // ListAll returns all GGUF models and mmproj file paths in a single scan.
-func (m *Manager) ListAll() (models []LocalModel, mmprojs []string, err error) {
+func (m *Manager) ListAll() (models []LocalModel, mmprojs []LocalMMProj, err error) {
 	for _, dir := range m.dirs {
 		found, e := scanRecursive(dir, SourceUser, &mmprojs)
 		if e != nil {
@@ -76,7 +82,7 @@ func (m *Manager) List() ([]LocalModel, error) {
 }
 
 // scanRecursive walks a directory tree and collects GGUF models and mmproj files.
-func scanRecursive(root string, source Source, mmprojs *[]string) ([]LocalModel, error) {
+func scanRecursive(root string, source Source, mmprojs *[]LocalMMProj) ([]LocalModel, error) {
 	var models []LocalModel
 
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -95,7 +101,11 @@ func scanRecursive(root string, source Source, mmprojs *[]string) ([]LocalModel,
 		}
 		if isAuxiliaryGGUF(lower) {
 			if mmprojs != nil {
-				*mmprojs = append(*mmprojs, path)
+				rel, _ := filepath.Rel(root, path)
+				if rel == "" {
+					rel = d.Name()
+				}
+				*mmprojs = append(*mmprojs, LocalMMProj{Path: path, RelPath: rel})
 			}
 			return nil
 		}
@@ -121,7 +131,7 @@ func scanRecursive(root string, source Source, mmprojs *[]string) ([]LocalModel,
 
 // scanLMStudio scans the LM Studio models directory.
 // Expected layout: {lmStudioDir}/{publisher}/{model-name}/*.gguf
-func scanLMStudio(root string, mmprojs *[]string) ([]LocalModel, error) {
+func scanLMStudio(root string, mmprojs *[]LocalMMProj) ([]LocalModel, error) {
 	var models []LocalModel
 
 	publishers, err := os.ReadDir(root)
@@ -160,7 +170,9 @@ func scanLMStudio(root string, mmprojs *[]string) ([]LocalModel, error) {
 				}
 				if isAuxiliaryGGUF(lower) {
 					if mmprojs != nil {
-						*mmprojs = append(*mmprojs, filepath.Join(modelDir, f.Name()))
+						fullPath := filepath.Join(modelDir, f.Name())
+						rel := fmt.Sprintf("%s/%s/%s", pub.Name(), md.Name(), f.Name())
+						*mmprojs = append(*mmprojs, LocalMMProj{Path: fullPath, RelPath: rel})
 					}
 					continue
 				}
@@ -184,8 +196,8 @@ func scanLMStudio(root string, mmprojs *[]string) ([]LocalModel, error) {
 	return models, nil
 }
 
-// ListMMProj returns paths of mmproj GGUF files across all sources.
-func (m *Manager) ListMMProj() []string {
+// ListMMProj returns mmproj GGUF files across all sources.
+func (m *Manager) ListMMProj() []LocalMMProj {
 	_, mmprojs, _ := m.ListAll()
 	return mmprojs
 }

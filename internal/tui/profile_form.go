@@ -50,7 +50,7 @@ type profileFormState struct {
 	// data needed to build the main form
 	models   []model.LocalModel
 	runtimes []runtime.InstalledRuntime
-	mmprojs  []string
+	mmprojs  []model.LocalMMProj
 	width    int
 }
 
@@ -65,7 +65,7 @@ type profileFormDataMsg struct {
 	editing  *profile.Profile
 	models   []model.LocalModel
 	runtimes []runtime.InstalledRuntime
-	mmprojs  []string
+	mmprojs  []model.LocalMMProj
 	err      error
 }
 
@@ -80,7 +80,7 @@ func newProfileFormState(
 	editing *profile.Profile,
 	models []model.LocalModel,
 	runtimes []runtime.InstalledRuntime,
-	mmprojs []string,
+	mmprojs []model.LocalMMProj,
 	width int,
 ) profileFormState {
 	if width <= 0 {
@@ -168,7 +168,7 @@ func (pf *profileFormState) buildMainForm() {
 	// mmproj options
 	mmprojOptions := []huh.Option[string]{huh.NewOption("(none)", "")}
 	for _, mp := range pf.mmprojs {
-		mmprojOptions = append(mmprojOptions, huh.NewOption(filepath.Base(mp), mp))
+		mmprojOptions = append(mmprojOptions, huh.NewOption(mp.RelPath, mp.Path))
 	}
 
 	numValidator := func(s string) error {
