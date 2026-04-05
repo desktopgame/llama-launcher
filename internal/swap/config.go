@@ -72,6 +72,8 @@ func GenerateConfig(
 	b.WriteString("\ngroups:\n")
 	fmt.Fprintf(&b, "  %s:\n", groupResident)
 	b.WriteString("    swap: false\n")
+	b.WriteString("    exclusive: false\n")
+	b.WriteString("    persistent: true\n")
 	fmt.Fprintf(&b, "  %s:\n", groupOnDemand)
 	b.WriteString("    swap: true\n")
 
