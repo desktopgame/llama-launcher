@@ -12,10 +12,18 @@ import (
 	"github.com/desktopgame/llama-launcher/internal/runtime"
 	"github.com/desktopgame/llama-launcher/internal/swap"
 	"github.com/desktopgame/llama-launcher/internal/tui"
+	"github.com/desktopgame/llama-launcher/internal/winjob"
 	"github.com/desktopgame/llama-launcher/internal/workspace"
 )
 
 func main() {
+	// Windowsでは自分をkill-on-closeなJob Objectに入れてから子プロセスを起動する。
+	// launcherがどんな死に方をしてもllama-swap/llama-serverが道連れになり、
+	// GPUメモリを握ったままの孤児プロセスが残らない。
+	if err := winjob.SetupKillOnClose(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: job object setup failed: %v\n", err)
+	}
+
 	if len(os.Args) > 1 {
 		runHeadless(os.Args[1])
 		return
