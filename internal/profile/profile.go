@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -18,19 +19,38 @@ const (
 
 // Profile represents a combination of model + runtime + launch parameters.
 type Profile struct {
-	Name                   string    `json:"name"`
-	ModelPath              string    `json:"model_path"`
-	RuntimeDirName         string    `json:"runtime_dir_name"`
-	ModelType              ModelType `json:"model_type"`
-	ContextSize            int       `json:"context_size,omitempty"`
-	GPULayers              int       `json:"gpu_layers,omitempty"`
-	FlashAttention         bool      `json:"flash_attention,omitempty"`
-	NoMmap                 bool      `json:"no_mmap,omitempty"`
-	Jinja                  bool      `json:"jinja,omitempty"`
-	ReasoningBudget        int       `json:"reasoning_budget,omitempty"`
-	ReasoningBudgetMessage string    `json:"reasoning_budget_message,omitempty"`
-	MMProjPath             string    `json:"mmproj_path,omitempty"`
-	ExtraArgs              string    `json:"extra_args,omitempty"`
+	Name                   string            `json:"name"`
+	ModelPath              string            `json:"model_path"`
+	RuntimeDirName         string            `json:"runtime_dir_name"`
+	ModelType              ModelType         `json:"model_type"`
+	ContextSize            int               `json:"context_size,omitempty"`
+	GPULayers              int               `json:"gpu_layers,omitempty"`
+	FlashAttention         bool              `json:"flash_attention,omitempty"`
+	NoMmap                 bool              `json:"no_mmap,omitempty"`
+	Jinja                  bool              `json:"jinja,omitempty"`
+	ReasoningBudget        int               `json:"reasoning_budget,omitempty"`
+	ReasoningBudgetMessage string            `json:"reasoning_budget_message,omitempty"`
+	MMProjPath             string            `json:"mmproj_path,omitempty"`
+	ExtraArgs              string            `json:"extra_args,omitempty"`
+	Env                    map[string]string `json:"env,omitempty"`
+}
+
+// EnvPairs returns the profile's environment variables as "KEY=VALUE" entries,
+// sorted by key for deterministic output.
+func (p *Profile) EnvPairs() []string {
+	if len(p.Env) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(p.Env))
+	for k := range p.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, k+"="+p.Env[k])
+	}
+	return pairs
 }
 
 // BuildArgs returns the command-line arguments for llama-server.

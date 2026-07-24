@@ -32,6 +32,7 @@ type profileFormValues struct {
 	reasoningBudgetMessage string
 	mmprojPath             string
 	extraArgs              string
+	env                    string
 }
 
 type profileFormStep int
@@ -113,6 +114,9 @@ func newProfileFormState(
 		vals.reasoningBudgetMessage = editing.ReasoningBudgetMessage
 		vals.mmprojPath = editing.MMProjPath
 		vals.extraArgs = editing.ExtraArgs
+		if len(editing.Env) > 0 {
+			vals.env = strings.Join(editing.EnvPairs(), "\n")
+		}
 	}
 
 	// model type options
@@ -244,6 +248,9 @@ func (pf *profileFormState) buildMainForm() {
 		huh.NewText().
 			Title("Extra Args (free-form llama-server options)").
 			Value(&vals.extraArgs),
+		huh.NewText().
+			Title("Environment Variables (KEY=VALUE, one per line)").
+			Value(&vals.env),
 	)
 
 	pf.form = huh.NewForm(group1, group2, group3).WithWidth(width).WithShowHelp(true)
@@ -255,6 +262,23 @@ func (pf *profileFormState) toProfile() *profile.Profile {
 	gpuLayers, _ := strconv.Atoi(v.gpuLayers)
 
 	reasoningBudget, _ := strconv.Atoi(v.reasoningBudget)
+
+	var env map[string]string
+	for line := range strings.SplitSeq(v.env, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		if env == nil {
+			env = make(map[string]string)
+		}
+		env[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+
 	return &profile.Profile{
 		Name:                   strings.TrimSpace(v.profileName),
 		ModelType:              profile.ModelType(v.modelType),
@@ -269,6 +293,7 @@ func (pf *profileFormState) toProfile() *profile.Profile {
 		ReasoningBudgetMessage: v.reasoningBudgetMessage,
 		MMProjPath:             v.mmprojPath,
 		ExtraArgs:              v.extraArgs,
+		Env:                    env,
 	}
 }
 
@@ -425,6 +450,9 @@ func (m Model) viewProfileDetail() string {
 	}
 	if p.ExtraArgs != "" {
 		line("Extra Args", p.ExtraArgs)
+	}
+	if pairs := p.EnvPairs(); len(pairs) > 0 {
+		line("Env", strings.Join(pairs, ", "))
 	}
 
 	return borderStyle.Render(b.String())

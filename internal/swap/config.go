@@ -69,6 +69,12 @@ func GenerateConfig(
 		fmt.Fprintf(&b, "    cmd: \"%s\"\n", strings.ReplaceAll(cmd, "\"", "\\\""))
 		fmt.Fprintf(&b, "    proxy: \"http://127.0.0.1:%d\"\n", backendPort)
 		fmt.Fprintf(&b, "    ttl: %d\n", entry.TTL)
+		if envPairs := prof.EnvPairs(); len(envPairs) > 0 {
+			b.WriteString("    env:\n")
+			for _, kv := range envPairs {
+				fmt.Fprintf(&b, "      - \"%s\"\n", strings.ReplaceAll(kv, "\"", "\\\""))
+			}
+		}
 	}
 
 	// groups section — use members to assign models to groups
