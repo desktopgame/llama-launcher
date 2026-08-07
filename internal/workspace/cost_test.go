@@ -103,3 +103,32 @@ func TestCheckCostMissingCost(t *testing.T) {
 		t.Errorf("got %d warnings, want 2: %v", len(warnings), warnings)
 	}
 }
+
+// cost 未設定でも measured_cost があればチェックに使われる
+func TestCheckCostFallsBackToMeasured(t *testing.T) {
+	env := newTestEnv(t)
+	env.addProfile(t, "res", true, nil)
+
+	prof, err := env.profMgr.Load("res")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prof.MeasuredCost = intPtr(120)
+	if err := env.profMgr.Save(prof); err != nil {
+		t.Fatal(err)
+	}
+
+	ws := residentWS(Entry{ProfileName: "res", Resident: true})
+
+	// 実測値があるので strict でもエラーにならない
+	report, warnings, err := CheckCost(ws, env.profMgr, 100, true)
+	if err == nil {
+		t.Fatal("expected an error: measured cost 120 exceeds cost_max 100")
+	}
+	if len(warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", warnings)
+	}
+	if report.ResidentTotal != 120 {
+		t.Errorf("resident total = %d, want 120", report.ResidentTotal)
+	}
+}

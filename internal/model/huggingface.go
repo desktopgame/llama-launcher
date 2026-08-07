@@ -14,11 +14,11 @@ const hfAPIBase = "https://huggingface.co/api"
 
 // HFModel represents a model repository on HuggingFace.
 type HFModel struct {
-	ID        string     `json:"id"`        // e.g. "TheBloke/Llama-2-7B-GGUF"
-	Downloads int        `json:"downloads"`
-	Likes     int        `json:"likes"`
-	Tags      []string   `json:"tags"`
-	Siblings  []HFFile   `json:"siblings"`
+	ID        string   `json:"id"` // e.g. "TheBloke/Llama-2-7B-GGUF"
+	Downloads int      `json:"downloads"`
+	Likes     int      `json:"likes"`
+	Tags      []string `json:"tags"`
+	Siblings  []HFFile `json:"siblings"`
 }
 
 // Author returns the author portion of the model ID.

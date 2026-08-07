@@ -78,3 +78,35 @@ func TestListNamesUsesFilenames(t *testing.T) {
 		t.Errorf("got %v, want [a b]", names)
 	}
 }
+
+func TestEffectiveCost(t *testing.T) {
+	tests := []struct {
+		name     string
+		cost     *int
+		measured *int
+		want     *int
+	}{
+		{"neither set", nil, nil, nil},
+		{"measured only", nil, intPtr(100), intPtr(100)},
+		{"manual only", intPtr(200), nil, intPtr(200)},
+		// 手で入れた値は実測値より優先される
+		{"manual wins", intPtr(200), intPtr(100), intPtr(200)},
+		// 0 も有効な手動値であって「未設定」ではない
+		{"manual zero wins", intPtr(0), intPtr(100), intPtr(0)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Profile{Cost: tt.cost, MeasuredCost: tt.measured}
+			got := p.EffectiveCost()
+			switch {
+			case tt.want == nil && got != nil:
+				t.Errorf("got %d, want nil", *got)
+			case tt.want != nil && got == nil:
+				t.Errorf("got nil, want %d", *tt.want)
+			case tt.want != nil && *got != *tt.want:
+				t.Errorf("got %d, want %d", *got, *tt.want)
+			}
+		})
+	}
+}

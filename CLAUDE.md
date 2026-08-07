@@ -53,6 +53,7 @@ internal/
 - **llama-swap連携**: ワークスペースからconfig.yamlを一時ファイルに生成し、llama-swapプロセスを起動。常駐モデルはswap:falseグループ、非常駐はswap:trueグループに配置
 - **--residentモード**: ワークスペースを使わず、`profiles/`配下の全プロファイルからメモリ上でワークスペースを組み立てる（`internal/workspace/resident.go`）。`--resident`に明示されたプロファイルは解決できなければエラー、暗黙に含まれるものは警告してスキップ、と非対称に扱う
 - **cost**: プロファイル単位のメモリ消費の抽象量。`config.json`の`cost_max`と組み合わせて `sum(常駐) + max(非常駐) <= cost_max` を起動前に検査する（`internal/workspace/cost.go`）。常駐側の超過はエラー、ピークの超過は警告
+- **cost の実測**: `--measure` は各モデルを1つずつロードし、llama-swapの`/metrics`（`llamaswap_memory_used_bytes`）の差分を`measured_cost`に書き戻す（`internal/measure`）。llama-swapはモデル単位のメモリメトリクスを持たないため差分法を使う。手動の`cost`は上書きしない（実効値は`Profile.EffectiveCost()`）
 
 ### TUI設計上の注意
 
@@ -69,3 +70,4 @@ internal/
 - config.yamlはワークスペースから動的生成される一時ファイル。ディスクに永続化しない
 - Windowsパスはconfig.yaml生成時にスラッシュに正規化する（YAMLエスケープ問題の回避）
 - 未設定と 0 が別の意味を持つ設定値（`reasoning_budget`, `cost`）は `*int` で保持する。llama-serverの`--reasoning-budget 0`は「思考を即終了」という有効な値で、落とすと既定の`-1`（無制限）になり意図と正反対になる
+- 自動で埋める値と手で入れた値は別フィールドに分ける（`measured_cost` と `cost`）。ツールがユーザーの入力を黙って壊さないため

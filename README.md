@@ -118,6 +118,23 @@ sum(常駐のcost) + max(非常駐のcost) <= cost_max
 
 `cost_max`が未設定(0)ならチェックは行われません。
 
+### cost の実測
+
+```bash
+llama-launcher --measure                    # 全プロファイル
+llama-launcher --measure gemma4-31b,qwen3-embedding   # 指定分だけ
+```
+
+各モデルを1つずつロードして、llama-swapの`/metrics`が返すシステムメモリ使用量の差分を取り、
+`measured_cost`としてプロファイルに書き戻します。llama-swapはモデル単位のメモリメトリクスを
+持たないため、「アンロード直後」と「ロード完了後」の差分で測ります。
+ログ行のフォーマットに依存しないので、llama.cppのビルドが変わっても壊れません。
+
+- 手で入れた`cost`は**絶対に上書きしません**。`--measure`が書くのは`measured_cost`だけです
+- 実効cost = `cost`が設定されていればそれ、なければ`measured_cost`
+- 測定は差分なので、他のプロセスがメモリを大きく動かしていると値が汚れます
+- llama-swapが既に起動しているポートでは実行できません（メモリを排他的に使えないため）
+
 ## 動作確認済み環境
 
 - Windows 11

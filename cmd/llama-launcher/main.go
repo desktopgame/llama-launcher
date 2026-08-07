@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/desktopgame/llama-launcher/internal/config"
+	"github.com/desktopgame/llama-launcher/internal/measure"
 	"github.com/desktopgame/llama-launcher/internal/profile"
 	"github.com/desktopgame/llama-launcher/internal/runtime"
 	"github.com/desktopgame/llama-launcher/internal/swap"
@@ -30,9 +31,13 @@ func main() {
 		"comma-separated profile names to keep resident; runs without a workspace")
 	ttl := flag.Int("ttl", workspace.DefaultTTL,
 		"TTL in seconds applied to every model in --resident mode")
+	// 値なしで呼べる必要があるので bool。対象プロファイルは位置引数で受ける
+	measure := flag.Bool("measure", false,
+		"load each profile in turn and record its measured cost; names may follow, default is all")
 	flag.Usage = usage
 	flag.Parse()
 
+	// --resident は空文字列("常駐なし")と未指定を区別する必要がある
 	residentGiven := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "resident" {
@@ -41,6 +46,8 @@ func main() {
 	})
 
 	switch {
+	case *measure:
+		runMeasure(splitNames(strings.Join(flag.Args(), ",")))
 	case residentGiven:
 		runResident(splitNames(*resident), *ttl)
 	case flag.NArg() > 0:
@@ -58,6 +65,8 @@ Usage:
   llama-launcher <workspace>            start llama-swap from a saved workspace
   llama-launcher --resident a,b,c       start llama-swap from all profiles,
                                         keeping the named ones resident
+  llama-launcher --measure [a,b]        load each profile in turn and record
+                                        its measured cost, then exit
 
 Options:
 `)
@@ -198,4 +207,52 @@ func startAndWait(
 		os.Exit(1)
 	}
 	fmt.Println("Stopped")
+}
+
+// runMeasure loads each profile in turn and records how much memory it needs.
+// An empty names slice measures every usable profile.
+func runMeasure(names []string) {
+	cfg, profMgr, rtMgr := loadEnv()
+
+	if len(names) == 0 {
+		fmt.Println("Measuring every usable profile. This loads each model in turn and takes a while.")
+	} else {
+		fmt.Printf("Measuring: %s\n", strings.Join(names, ", "))
+	}
+	fmt.Println("Close anything else that uses significant memory — the measurement is a delta.")
+
+	results, err := measure.Run(names, profMgr, rtMgr, measure.Options{
+		Port: cfg.Port,
+		Log:  func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("\nResults (cost is in MB):")
+	failed := 0
+	for _, r := range results {
+		if r.Err != nil {
+			failed++
+			fmt.Printf("  %-32s FAILED: %v\n", r.ProfileName, r.Err)
+			continue
+		}
+		prof, err := profMgr.Load(r.ProfileName)
+		note := ""
+		// 手で入れた cost があるならそちらが優先されることを明示する
+		if err == nil && prof.Cost != nil {
+			note = fmt.Sprintf("  (cost %d is set by hand and still wins)", *prof.Cost)
+		}
+		fmt.Printf("  %-32s %6d%s\n", r.ProfileName, r.CostMB, note)
+	}
+
+	if failed > 0 {
+		fmt.Fprintf(os.Stderr, "\n%d profile(s) could not be measured\n", failed)
+		os.Exit(1)
+	}
+	fmt.Printf("\nWrote measured_cost to %d profile(s) in %s\n", len(results), profMgr.Dir())
+	if cfg.CostMax <= 0 {
+		fmt.Println("Set \"cost_max\" in config.json to enable the budget check.")
+	}
 }

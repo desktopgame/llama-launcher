@@ -37,6 +37,19 @@ type Profile struct {
 	// VRAM/RAM の境界が曖昧な環境でも使えるよう、単位を持たない整数にしている。
 	// nil = 未設定。
 	Cost *int `json:"cost,omitempty"`
+	// MeasuredCost は --measure が書き戻す実測値。手で入れた Cost は決して上書きしない。
+	MeasuredCost *int   `json:"measured_cost,omitempty"`
+	MeasuredAt   string `json:"measured_at,omitempty"` // RFC3339
+}
+
+// EffectiveCost returns the cost the budget check should use: the hand-set
+// value if there is one, otherwise the measured one. Returns nil when neither
+// has been set.
+func (p *Profile) EffectiveCost() *int {
+	if p.Cost != nil {
+		return p.Cost
+	}
+	return p.MeasuredCost
 }
 
 // EnvPairs returns the profile's environment variables as "KEY=VALUE" entries,

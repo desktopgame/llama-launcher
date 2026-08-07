@@ -4,9 +4,9 @@ import "testing"
 
 func TestParseAssetName(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		want    *AssetInfo
+		name  string
+		input string
+		want  *AssetInfo
 	}{
 		{
 			name:  "win vulkan x64",

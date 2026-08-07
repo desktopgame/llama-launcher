@@ -50,8 +50,8 @@ func CheckCost(
 		}
 
 		cost := 0
-		if prof.Cost != nil {
-			cost = *prof.Cost
+		if c := prof.EffectiveCost(); c != nil {
+			cost = *c
 		} else if entry.Resident && strictResident {
 			return report, warnings, fmt.Errorf(
 				"resident profile %q has no cost set (required when cost_max is configured)", entry.ProfileName)

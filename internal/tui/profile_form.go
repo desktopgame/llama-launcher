@@ -241,7 +241,7 @@ func (pf *profileFormState) buildMainForm() {
 			Title("Disable mmap").
 			Value(&vals.noMmap),
 		huh.NewInput().
-			Title("Cost (memory budget units, empty = unset)").
+			Title("Cost in MB (empty = use the measured value)").
 			Value(&vals.cost).
 			Validate(numValidator),
 	)
@@ -481,6 +481,13 @@ func (m Model) viewProfileDetail() string {
 	}
 	if p.Cost != nil {
 		line("Cost", strconv.Itoa(*p.Cost))
+	}
+	if p.MeasuredCost != nil {
+		v := strconv.Itoa(*p.MeasuredCost)
+		if p.Cost != nil {
+			v += " (overridden by Cost)"
+		}
+		line("Cost (measured)", v)
 	}
 
 	return borderStyle.Render(b.String())
