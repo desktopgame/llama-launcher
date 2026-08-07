@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -34,6 +35,8 @@ func main() {
 	// 値なしで呼べる必要があるので bool。対象プロファイルは位置引数で受ける
 	measure := flag.Bool("measure", false,
 		"load each profile in turn and record its measured cost; names may follow, default is all")
+	dryRun := flag.Bool("dry-run", false,
+		"validate the setup and report whether it fits, without starting llama-swap")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -47,11 +50,19 @@ func main() {
 
 	switch {
 	case *measure:
+		if *dryRun {
+			fmt.Fprintln(os.Stderr, "Error: --dry-run cannot be combined with --measure")
+			os.Exit(2)
+		}
 		runMeasure(splitNames(strings.Join(flag.Args(), ",")))
 	case residentGiven:
-		runResident(splitNames(*resident), *ttl)
+		runResident(splitNames(*resident), *ttl, *dryRun)
 	case flag.NArg() > 0:
-		runHeadless(flag.Arg(0))
+		runHeadless(flag.Arg(0), *dryRun)
+	case *dryRun:
+		// 何を検査するか決まらない
+		fmt.Fprintln(os.Stderr, "Error: --dry-run needs a workspace name or --resident")
+		os.Exit(2)
 	default:
 		runTUI()
 	}
@@ -67,6 +78,9 @@ Usage:
                                         keeping the named ones resident
   llama-launcher --measure [a,b]        load each profile in turn and record
                                         its measured cost, then exit
+
+Add --dry-run to a workspace or --resident run to report whether it fits
+without starting llama-swap.
 
 Options:
 `)
@@ -98,7 +112,7 @@ func runTUI() {
 	}
 }
 
-func runHeadless(wsName string) {
+func runHeadless(wsName string, dryRun bool) {
 	cfg, profMgr, rtMgr := loadEnv()
 
 	wsMgr := workspace.NewManager(cfg.WorkspaceDir)
@@ -109,13 +123,19 @@ func runHeadless(wsName string) {
 	}
 
 	// ワークスペースの中身はユーザーが個別に選んだものなので、cost 未設定は警告に留める
-	checkCost(ws, profMgr, cfg.CostMax, false)
-	startAndWait(cfg, ws, profMgr, rtMgr, fmt.Sprintf("workspace %q", wsName))
+	report := checkCost(ws, profMgr, cfg.CostMax, false)
+	label := fmt.Sprintf("workspace %q", wsName)
+	if dryRun {
+		describePlan(ws, profMgr, rtMgr, cfg, report, label)
+		return
+	}
+	printCostSummary(report)
+	startAndWait(cfg, ws, profMgr, rtMgr, label)
 }
 
 // runResident starts llama-swap without a workspace: every profile on disk is
 // included, and only the named ones are marked resident.
-func runResident(names []string, ttl int) {
+func runResident(names []string, ttl int, dryRun bool) {
 	cfg, profMgr, rtMgr := loadEnv()
 
 	ws, warnings, err := workspace.BuildResident(profMgr, rtMgr, names, ttl)
@@ -126,7 +146,7 @@ func runResident(names []string, ttl int) {
 	}
 
 	// --resident に名前を書いた=意図があるので cost 必須
-	checkCost(ws, profMgr, cfg.CostMax, true)
+	report := checkCost(ws, profMgr, cfg.CostMax, true)
 
 	residentCount := 0
 	for _, e := range ws.Entries {
@@ -137,7 +157,13 @@ func runResident(names []string, ttl int) {
 	fmt.Printf("Resident: %d, on-demand: %d, TTL: %ds\n",
 		residentCount, len(ws.Entries)-residentCount, ttl)
 
-	startAndWait(cfg, ws, profMgr, rtMgr, fmt.Sprintf("resident %s", strings.Join(names, ", ")))
+	label := fmt.Sprintf("resident %s", strings.Join(names, ", "))
+	if dryRun {
+		describePlan(ws, profMgr, rtMgr, cfg, report, label)
+		return
+	}
+	printCostSummary(report)
+	startAndWait(cfg, ws, profMgr, rtMgr, label)
 }
 
 func loadEnv() (*config.Config, *profile.Manager, *runtime.Manager) {
@@ -149,13 +175,19 @@ func loadEnv() (*config.Config, *profile.Manager, *runtime.Manager) {
 	return cfg, profile.NewManager(cfg.ProfileDir), runtime.NewManager(cfg.RuntimeDir)
 }
 
-func checkCost(ws *workspace.Workspace, profMgr *profile.Manager, costMax int, strictResident bool) {
+func checkCost(ws *workspace.Workspace, profMgr *profile.Manager, costMax int, strictResident bool) workspace.CostReport {
 	report, warnings, err := workspace.CheckCost(ws, profMgr, costMax, strictResident)
 	printWarnings(warnings)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	return report
+}
+
+// printCostSummary is the one-liner shown before an actual start. --dry-run
+// prints the full breakdown instead.
+func printCostSummary(report workspace.CostReport) {
 	if report.Max > 0 {
 		fmt.Printf("Cost: resident %d + peak on-demand %d = %d / %d\n",
 			report.ResidentTotal, report.PeakOnDemand, report.Peak(), report.Max)
@@ -254,5 +286,104 @@ func runMeasure(names []string) {
 	fmt.Printf("\nWrote measured_cost to %d profile(s) in %s\n", len(results), profMgr.Dir())
 	if cfg.CostMax <= 0 {
 		fmt.Println("Set \"cost_max\" in config.json to enable the budget check.")
+	}
+}
+
+// describePlan reports what would happen without starting anything. It still
+// generates the config, because that is where an unresolvable profile would
+// blow up at startup.
+func describePlan(
+	ws *workspace.Workspace,
+	profMgr *profile.Manager,
+	rtMgr *runtime.Manager,
+	cfg *config.Config,
+	report workspace.CostReport,
+	label string,
+) {
+	fmt.Printf("\nDry run for %s\n", label)
+
+	printGroup(ws, profMgr, report, true, "Resident (all loaded at once)")
+	printGroup(ws, profMgr, report, false, "On-demand (one at a time)")
+
+	switch {
+	case report.Max <= 0:
+		fmt.Println("\n  cost_max is not set, so nothing was checked against a budget.")
+	default:
+		fmt.Printf("\n  %-32s %8d\n", "peak", report.Peak())
+		fmt.Printf("  %-32s %8d\n", "cost_max", report.Max)
+		fmt.Printf("  %-32s %8d\n", "headroom", report.Max-report.Peak())
+		// 常駐側の超過は checkCost が既に落としているので、ここに来る超過は
+		// 「そのモデルを実際に呼んだときだけ起きる仮定のピーク」に限られる
+		if report.Peak() > report.Max {
+			fmt.Printf("\n  Over budget by %d. The resident set itself fits;\n"+
+				"  loading %q on top of it may fail.\n",
+				report.Peak()-report.Max, report.PeakProfile)
+		} else {
+			fmt.Println("\n  Fits within cost_max.")
+		}
+	}
+
+	// llama-swap 本体と config 生成まで通しておく。起動時に初めて落ちるのを防ぐ
+	if err := swap.CheckInstalled(); err != nil {
+		fmt.Fprintf(os.Stderr, "\n%v\n", err)
+		os.Exit(1)
+	}
+	configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, cfg.Port)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\nError generating config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\nGenerated config: %s\n", configPath)
+	fmt.Println("Dry run only — llama-swap was not started.")
+}
+
+func printGroup(
+	ws *workspace.Workspace,
+	profMgr *profile.Manager,
+	report workspace.CostReport,
+	resident bool,
+	heading string,
+) {
+	var lines []string
+	for _, e := range ws.Entries {
+		if e.Resident != resident {
+			continue
+		}
+		note := ""
+		if !resident && e.ProfileName == report.PeakProfile {
+			note = "  <- peak"
+		}
+		value, source := costCells(profMgr, e.ProfileName)
+		lines = append(lines, fmt.Sprintf("  %-32s %8s  %-8s%s",
+			e.ProfileName, value, source, note))
+	}
+	if len(lines) == 0 {
+		return
+	}
+
+	fmt.Printf("\n%s\n", heading)
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+	if resident {
+		fmt.Printf("  %-32s %8d\n", "total", report.ResidentTotal)
+	}
+}
+
+// costCells returns the effective cost and where it came from, so it is obvious
+// whether a number was measured or typed in by hand.
+func costCells(profMgr *profile.Manager, name string) (value, source string) {
+	prof, err := profMgr.Load(name)
+	if err != nil {
+		return "?", "unreadable"
+	}
+	switch {
+	case prof.Cost != nil:
+		return strconv.Itoa(*prof.Cost), "manual"
+	case prof.MeasuredCost != nil:
+		return strconv.Itoa(*prof.MeasuredCost), "measured"
+	default:
+		return "-", "unset"
 	}
 }

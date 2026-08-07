@@ -135,6 +135,38 @@ llama-launcher --measure gemma4-31b,qwen3-embedding   # 指定分だけ
 - 測定は差分なので、他のプロセスがメモリを大きく動かしていると値が汚れます
 - llama-swapが既に起動しているポートでは実行できません（メモリを排他的に使えないため）
 
+
+### ドライラン
+
+```bash
+llama-launcher --resident gemma4-31b,qwen3-embedding --dry-run
+llama-launcher myworkspace --dry-run
+```
+
+llama-swapを起動せずに、その構成が収まるかどうかだけを報告します。
+
+```
+Resident (all loaded at once)
+  gemma4-31b                          29523  measured
+  qwen3-embedding                      6350  measured
+  total                               35873
+
+On-demand (one at a time)
+  gemma4-31b-qat-mtp                  28593  measured  <- peak
+  ...
+
+  peak                                64466
+  cost_max                            92160
+  headroom                            27694
+
+  Fits within cost_max.
+```
+
+各costが実測値(`measured`)か手入力(`manual`)か未設定(`unset`)かも出ます。
+config.yamlの生成まで実行するので、起動して初めて分かる種類の失敗（プロファイルが解決できない等）もここで検出できます。
+
+終了コードは、常駐の合計が`cost_max`を超えていれば1、収まっていれば0です（ピークの超過は警告なので0）。
+
 ## 動作確認済み環境
 
 - Windows 11

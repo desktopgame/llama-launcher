@@ -54,6 +54,7 @@ internal/
 - **--residentモード**: ワークスペースを使わず、`profiles/`配下の全プロファイルからメモリ上でワークスペースを組み立てる（`internal/workspace/resident.go`）。`--resident`に明示されたプロファイルは解決できなければエラー、暗黙に含まれるものは警告してスキップ、と非対称に扱う
 - **cost**: プロファイル単位のメモリ消費の抽象量。`config.json`の`cost_max`と組み合わせて `sum(常駐) + max(非常駐) <= cost_max` を起動前に検査する（`internal/workspace/cost.go`）。常駐側の超過はエラー、ピークの超過は警告
 - **cost の実測**: `--measure` は各モデルを1つずつロードし、llama-swapの`/metrics`（`llamaswap_memory_used_bytes`）の差分を`measured_cost`に書き戻す（`internal/measure`）。llama-swapはモデル単位のメモリメトリクスを持たないため差分法を使う。手動の`cost`は上書きしない（実効値は`Profile.EffectiveCost()`）
+- **ドライラン**: `--dry-run` はワークスペース起動・`--resident`のどちらにも付けられる。cost内訳とconfig.yaml生成まで実行して、llama-swapは起動しない。常駐超過は終了コード1、ピーク超過は警告で0
 
 ### TUI設計上の注意
 
