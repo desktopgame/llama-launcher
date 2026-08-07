@@ -28,11 +28,15 @@ type Profile struct {
 	FlashAttention         bool              `json:"flash_attention,omitempty"`
 	NoMmap                 bool              `json:"no_mmap,omitempty"`
 	Jinja                  bool              `json:"jinja,omitempty"`
-	ReasoningBudget        int               `json:"reasoning_budget,omitempty"`
+	ReasoningBudget        *int              `json:"reasoning_budget,omitempty"` // nil = 未設定, 0 = 思考を即終了, -1 = 無制限
 	ReasoningBudgetMessage string            `json:"reasoning_budget_message,omitempty"`
 	MMProjPath             string            `json:"mmproj_path,omitempty"`
 	ExtraArgs              string            `json:"extra_args,omitempty"`
 	Env                    map[string]string `json:"env,omitempty"`
+	// Cost はこのプロファイルを常駐させたときのメモリ消費の抽象量。
+	// VRAM/RAM の境界が曖昧な環境でも使えるよう、単位を持たない整数にしている。
+	// nil = 未設定。
+	Cost *int `json:"cost,omitempty"`
 }
 
 // EnvPairs returns the profile's environment variables as "KEY=VALUE" entries,
@@ -77,8 +81,9 @@ func (p *Profile) BuildArgs(port int) []string {
 	if p.Jinja {
 		args = append(args, "--jinja")
 	}
-	if p.ReasoningBudget > 0 {
-		args = append(args, "--reasoning-budget", fmt.Sprintf("%d", p.ReasoningBudget))
+	// 0 は「思考を即終了」という有効な値なので、未設定(nil)と区別する
+	if p.ReasoningBudget != nil {
+		args = append(args, "--reasoning-budget", fmt.Sprintf("%d", *p.ReasoningBudget))
 	}
 	if p.ReasoningBudgetMessage != "" {
 		args = append(args, "--reasoning-budget-message", p.ReasoningBudgetMessage)
@@ -134,6 +139,28 @@ func (m *Manager) Load(name string) (*Profile, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// ListNames returns the names of all saved profiles, sorted, derived from the
+// filenames rather than the JSON body so they always round-trip through Load.
+func (m *Manager) ListNames() ([]string, error) {
+	entries, err := os.ReadDir(m.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		names = append(names, strings.TrimSuffix(e.Name(), ".json"))
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // List returns all saved profiles.

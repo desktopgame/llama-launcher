@@ -486,8 +486,9 @@ func (m Model) viewWsDetail() string {
 // --- Launch handlers ---
 
 type swapStartedMsg struct {
-	wsName string
-	err    error
+	wsName   string
+	warnings []string
+	err      error
 }
 
 type swapStoppedMsg struct {
@@ -520,6 +521,7 @@ func (m Model) handleWsStart() (tea.Model, tea.Cmd) {
 	profMgr := m.profManager
 	rtMgr := m.rtManager
 	port := m.cfg.Port
+	costMax := m.cfg.CostMax
 	proc := m.swapProc
 	m.current = viewLoading
 	m.status = fmt.Sprintf("Starting llama-swap with \"%s\"...", ws.Name)
@@ -529,16 +531,22 @@ func (m Model) handleWsStart() (tea.Model, tea.Cmd) {
 			return swapStartedMsg{err: err}
 		}
 
-		configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, port)
+		// ワークスペースの中身はユーザーが個別に選んだものなので、cost 未設定は警告に留める
+		_, warnings, err := workspace.CheckCost(ws, profMgr, costMax, false)
 		if err != nil {
 			return swapStartedMsg{err: err}
 		}
 
-		if err := proc.Start(configPath, port); err != nil {
-			return swapStartedMsg{err: err}
+		configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, port)
+		if err != nil {
+			return swapStartedMsg{err: err, warnings: warnings}
 		}
 
-		return swapStartedMsg{wsName: ws.Name}
+		if err := proc.Start(configPath, port); err != nil {
+			return swapStartedMsg{err: err, warnings: warnings}
+		}
+
+		return swapStartedMsg{wsName: ws.Name, warnings: warnings}
 	})
 }
 

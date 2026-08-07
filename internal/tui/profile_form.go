@@ -33,6 +33,7 @@ type profileFormValues struct {
 	mmprojPath             string
 	extraArgs              string
 	env                    string
+	cost                   string
 }
 
 type profileFormStep int
@@ -108,12 +109,15 @@ func newProfileFormState(
 		vals.flashAttn = editing.FlashAttention
 		vals.noMmap = editing.NoMmap
 		vals.jinja = editing.Jinja
-		if editing.ReasoningBudget > 0 {
-			vals.reasoningBudget = strconv.Itoa(editing.ReasoningBudget)
+		if editing.ReasoningBudget != nil {
+			vals.reasoningBudget = strconv.Itoa(*editing.ReasoningBudget)
 		}
 		vals.reasoningBudgetMessage = editing.ReasoningBudgetMessage
 		vals.mmprojPath = editing.MMProjPath
 		vals.extraArgs = editing.ExtraArgs
+		if editing.Cost != nil {
+			vals.cost = strconv.Itoa(*editing.Cost)
+		}
 		if len(editing.Env) > 0 {
 			vals.env = strings.Join(editing.EnvPairs(), "\n")
 		}
@@ -224,7 +228,7 @@ func (pf *profileFormState) buildMainForm() {
 				Title("Jinja Templates").
 				Value(&vals.jinja),
 			huh.NewInput().
-				Title("Reasoning Budget (empty = default)").
+				Title("Reasoning Budget (empty = default(-1), 0 = thinking off)").
 				Value(&vals.reasoningBudget).
 				Validate(numValidator),
 			huh.NewInput().
@@ -236,6 +240,10 @@ func (pf *profileFormState) buildMainForm() {
 		huh.NewConfirm().
 			Title("Disable mmap").
 			Value(&vals.noMmap),
+		huh.NewInput().
+			Title("Cost (memory budget units, empty = unset)").
+			Value(&vals.cost).
+			Validate(numValidator),
 	)
 	group2 := huh.NewGroup(group2Fields...)
 
@@ -256,12 +264,28 @@ func (pf *profileFormState) buildMainForm() {
 	pf.form = huh.NewForm(group1, group2, group3).WithWidth(width).WithShowHelp(true)
 }
 
+// optionalInt parses a form field where an empty string means "unset".
+// Returns nil for empty input so callers can tell "unset" from an explicit 0.
+func optionalInt(s string) *int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return nil
+	}
+	return &n
+}
+
 func (pf *profileFormState) toProfile() *profile.Profile {
 	v := pf.vals
 	ctxSize, _ := strconv.Atoi(v.contextSize)
 	gpuLayers, _ := strconv.Atoi(v.gpuLayers)
 
-	reasoningBudget, _ := strconv.Atoi(v.reasoningBudget)
+	// 空欄(未設定)と 0(思考を即終了)は意味が違うのでポインタで区別する
+	reasoningBudget := optionalInt(v.reasoningBudget)
+	cost := optionalInt(v.cost)
 
 	var env map[string]string
 	for line := range strings.SplitSeq(v.env, "\n") {
@@ -294,6 +318,7 @@ func (pf *profileFormState) toProfile() *profile.Profile {
 		MMProjPath:             v.mmprojPath,
 		ExtraArgs:              v.extraArgs,
 		Env:                    env,
+		Cost:                   cost,
 	}
 }
 
@@ -436,8 +461,8 @@ func (m Model) viewProfileDetail() string {
 	if p.Jinja {
 		line("Jinja", "yes")
 	}
-	if p.ReasoningBudget > 0 {
-		line("Reasoning Budget", strconv.Itoa(p.ReasoningBudget))
+	if p.ReasoningBudget != nil {
+		line("Reasoning Budget", strconv.Itoa(*p.ReasoningBudget))
 	}
 	if p.ReasoningBudgetMessage != "" {
 		line("Reasoning Budget/Msg", p.ReasoningBudgetMessage)
@@ -453,6 +478,9 @@ func (m Model) viewProfileDetail() string {
 	}
 	if pairs := p.EnvPairs(); len(pairs) > 0 {
 		line("Env", strings.Join(pairs, ", "))
+	}
+	if p.Cost != nil {
+		line("Cost", strconv.Itoa(*p.Cost))
 	}
 
 	return borderStyle.Render(b.String())

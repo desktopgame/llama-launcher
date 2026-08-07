@@ -8,13 +8,14 @@ import (
 
 // Config holds the application settings.
 type Config struct {
-	ModelDirs       []string `json:"model_dirs"`        // user-defined model storage directories (recursive scan)
-	LMStudioDir     string   `json:"lmstudio_dir"`      // LM Studio models dir (publisher/model-name layout)
-	RuntimeDir      string   `json:"runtime_dir"`       // where llama.cpp runtimes are stored
-	ProfileDir      string   `json:"profile_dir"`       // where profiles are stored
-	WorkspaceDir    string   `json:"workspace_dir"`     // where workspaces are stored
-	DefaultBackend  string   `json:"default_backend"`   // preferred backend: vulkan, cuda, rocm, cpu
-	Port            int      `json:"port"`              // llama-server port (shared across all profiles)
+	ModelDirs      []string `json:"model_dirs"`         // user-defined model storage directories (recursive scan)
+	LMStudioDir    string   `json:"lmstudio_dir"`       // LM Studio models dir (publisher/model-name layout)
+	RuntimeDir     string   `json:"runtime_dir"`        // where llama.cpp runtimes are stored
+	ProfileDir     string   `json:"profile_dir"`        // where profiles are stored
+	WorkspaceDir   string   `json:"workspace_dir"`      // where workspaces are stored
+	DefaultBackend string   `json:"default_backend"`    // preferred backend: vulkan, cuda, rocm, cpu
+	Port           int      `json:"port"`               // llama-server port (shared across all profiles)
+	CostMax        int      `json:"cost_max,omitempty"` // machine-wide memory budget for the cost check; 0 disables it
 }
 
 // DefaultPath returns the default config file path.

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -270,6 +271,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			logPath := m.swapProc.LogPath()
 			m.status = fmt.Sprintf("llama-swap started with \"%s\" on port %d (log: %s)", msg.wsName, m.cfg.Port, logPath)
+			if len(msg.warnings) > 0 {
+				m.status += "\n" + strings.Join(msg.warnings, "\n")
+			}
 		}
 		m.current = viewMenu
 		return m, nil
@@ -898,6 +902,14 @@ func (m Model) viewSettings() string {
 	}
 	b.WriteString("\n")
 
+	b.WriteString(labelStyle.Render("Cost max:"))
+	b.WriteString("\n")
+	if m.cfg.CostMax <= 0 {
+		b.WriteString(valueStyle.Render("(not set — cost check disabled)"))
+	} else {
+		b.WriteString(valueStyle.Render(strconv.Itoa(m.cfg.CostMax)))
+	}
+	b.WriteString("\n\n")
 	b.WriteString(hintStyle.Render("Press Enter to open config folder  |  q to back"))
 
 	if m.status != "" {
