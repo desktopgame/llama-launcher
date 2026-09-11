@@ -16,6 +16,7 @@ type Config struct {
 	DefaultBackend string   `json:"default_backend"`    // preferred backend: vulkan, cuda, rocm, cpu
 	Port           int      `json:"port"`               // llama-server port (shared across all profiles)
 	CostMax        int      `json:"cost_max,omitempty"` // machine-wide memory budget for the cost check; 0 disables it
+	ApiKeys        []string `json:"api_keys,omitempty"` // llama-swap apiKeys; required by every profile's OpenAI-compatible endpoint, empty disables auth
 }
 
 // DefaultPath returns the default config file path.

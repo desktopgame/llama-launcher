@@ -910,6 +910,15 @@ func (m Model) viewSettings() string {
 		b.WriteString(valueStyle.Render(strconv.Itoa(m.cfg.CostMax)))
 	}
 	b.WriteString("\n\n")
+
+	b.WriteString(labelStyle.Render("API keys (llama-swap):"))
+	b.WriteString("\n")
+	if len(m.cfg.ApiKeys) == 0 {
+		b.WriteString(valueStyle.Render("(not set — no auth required)"))
+	} else {
+		b.WriteString(valueStyle.Render(fmt.Sprintf("%d key(s) configured", len(m.cfg.ApiKeys))))
+	}
+	b.WriteString("\n\n")
 	b.WriteString(hintStyle.Render("Press Enter to open config folder  |  q to back"))
 
 	if m.status != "" {

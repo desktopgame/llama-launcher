@@ -212,7 +212,7 @@ func startAndWait(
 		os.Exit(1)
 	}
 
-	configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, cfg.Port)
+	configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, cfg.Port, swap.WithAPIKeys(cfg.ApiKeys))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating config: %v\n", err)
 		os.Exit(1)
@@ -254,8 +254,9 @@ func runMeasure(names []string) {
 	fmt.Println("Close anything else that uses significant memory — the measurement is a delta.")
 
 	results, err := measure.Run(names, profMgr, rtMgr, measure.Options{
-		Port: cfg.Port,
-		Log:  func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
+		Port:    cfg.Port,
+		ApiKeys: cfg.ApiKeys,
+		Log:     func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -328,7 +329,7 @@ func describePlan(
 		fmt.Fprintf(os.Stderr, "\n%v\n", err)
 		os.Exit(1)
 	}
-	configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, cfg.Port)
+	configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, cfg.Port, swap.WithAPIKeys(cfg.ApiKeys))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nError generating config: %v\n", err)
 		os.Exit(1)

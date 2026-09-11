@@ -72,6 +72,21 @@ func TestGenerateConfigWritesPerfInterval(t *testing.T) {
 	}
 }
 
+// apiKeys は全プロファイル共通の認可設定なので、ワークスペースに関わらずトップレベルに一度だけ出る
+func TestGenerateConfigWritesAPIKeys(t *testing.T) {
+	got := generate(t, WithAPIKeys([]string{"sk-a", "sk-b"}))
+	if !strings.Contains(got, "apiKeys:\n  - \"sk-a\"\n  - \"sk-b\"\n") {
+		t.Errorf("expected an apiKeys block:\n%s", got)
+	}
+}
+
+// 未設定なら書かない（llama-swap の既定は認可なし）
+func TestGenerateConfigOmitsAPIKeysByDefault(t *testing.T) {
+	if got := generate(t); strings.Contains(got, "apiKeys:") {
+		t.Errorf("did not expect an apiKeys block:\n%s", got)
+	}
+}
+
 func TestGenerateConfigGroupsAndPaths(t *testing.T) {
 	got := generate(t)
 	if !strings.Contains(got, "  resident:\n    swap: false\n") {

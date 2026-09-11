@@ -522,6 +522,7 @@ func (m Model) handleWsStart() (tea.Model, tea.Cmd) {
 	rtMgr := m.rtManager
 	port := m.cfg.Port
 	costMax := m.cfg.CostMax
+	apiKeys := m.cfg.ApiKeys
 	proc := m.swapProc
 	m.current = viewLoading
 	m.status = fmt.Sprintf("Starting llama-swap with \"%s\"...", ws.Name)
@@ -537,7 +538,7 @@ func (m Model) handleWsStart() (tea.Model, tea.Cmd) {
 			return swapStartedMsg{err: err}
 		}
 
-		configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, port)
+		configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, port, swap.WithAPIKeys(apiKeys))
 		if err != nil {
 			return swapStartedMsg{err: err, warnings: warnings}
 		}

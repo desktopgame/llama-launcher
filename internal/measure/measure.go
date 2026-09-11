@@ -44,6 +44,7 @@ const (
 // Options tunes a measurement run.
 type Options struct {
 	Port         int           // port llama-swap listens on during the run
+	ApiKeys      []string      // llama-swap apiKeys; when set, our own requests must carry one too
 	SettleWindow time.Duration // memory must stay flat for this long
 	LoadTimeout  time.Duration // per-model budget for reaching the ready state
 	Log          func(format string, args ...any)
@@ -106,7 +107,8 @@ func Run(
 	}
 	ws.Entries = targets
 
-	configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, opts.Port, swap.WithPerfInterval(perfInterval))
+	configPath, err := swap.GenerateConfig(ws, profMgr, rtMgr, opts.Port,
+		swap.WithPerfInterval(perfInterval), swap.WithAPIKeys(opts.ApiKeys))
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate config: %w", err)
 	}
@@ -119,9 +121,15 @@ func Run(
 	opts.Log("llama-swap started on port %d (log: %s)", opts.Port, proc.LogPath())
 
 	// 127.0.0.1 を使う。この環境では localhost への新規TCP接続に約2秒かかる
+	// apiKeys が設定されていても、llama-swap 側はリストの中のどれか1つで通す
+	var apiKey string
+	if len(opts.ApiKeys) > 0 {
+		apiKey = opts.ApiKeys[0]
+	}
 	m := &measurer{
 		base:   fmt.Sprintf("http://127.0.0.1:%d", opts.Port),
 		client: &http.Client{Timeout: 30 * time.Second},
+		apiKey: apiKey,
 		opts:   opts,
 	}
 	if err := m.waitHealthy(60 * time.Second); err != nil {
@@ -205,7 +213,38 @@ func checkPortFree(port int) error {
 type measurer struct {
 	base   string
 	client *http.Client
+	apiKey string
 	opts   Options
+}
+
+// authHeader sets the Bearer token llama-swap's apiKeyAuth middleware expects,
+// covering inference, management, and metrics routes alike. No-op when apiKeys
+// isn't configured.
+func (m *measurer) authHeader(req *http.Request) {
+	if m.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	}
+}
+
+func (m *measurer) doGet(client *http.Client, url string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	m.authHeader(req)
+	return client.Do(req)
+}
+
+func (m *measurer) doPost(url, contentType string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	m.authHeader(req)
+	return m.client.Do(req)
 }
 
 func (m *measurer) measureOne(name string) Result {
@@ -245,7 +284,7 @@ func (m *measurer) measureOne(name string) Result {
 // does: a plain GET at the model's upstream root.
 func (m *measurer) load(name string) error {
 	client := &http.Client{Timeout: m.opts.LoadTimeout}
-	resp, err := client.Get(m.base + "/upstream/" + name + "/")
+	resp, err := m.doGet(client, m.base+"/upstream/"+name+"/")
 	if err != nil {
 		return fmt.Errorf("load request failed: %w", err)
 	}
@@ -267,7 +306,7 @@ func (m *measurer) load(name string) error {
 }
 
 func (m *measurer) unloadAll() error {
-	resp, err := m.client.Post(m.base+"/api/models/unload", "application/json", nil)
+	resp, err := m.doPost(m.base+"/api/models/unload", "application/json")
 	if err != nil {
 		return fmt.Errorf("unload request failed: %w", err)
 	}
@@ -334,7 +373,7 @@ func spread(xs []int) int {
 // memoryUsedMB reads llamaswap_memory_used_bytes out of the Prometheus endpoint.
 // GPU側のメトリクスはユニファイドメモリ環境で実態と合わない値を返すので使わない。
 func (m *measurer) memoryUsedMB() (int, error) {
-	resp, err := m.client.Get(m.base + "/metrics")
+	resp, err := m.doGet(m.client, m.base+"/metrics")
 	if err != nil {
 		return 0, fmt.Errorf("metrics request failed: %w", err)
 	}
@@ -379,7 +418,7 @@ func (m *measurer) modelState(name string) (string, error) {
 
 // runningModels returns model id -> state for everything that is not stopped.
 func (m *measurer) runningModels() (map[string]string, error) {
-	resp, err := m.client.Get(m.base + "/running")
+	resp, err := m.doGet(m.client, m.base+"/running")
 	if err != nil {
 		return nil, fmt.Errorf("running request failed: %w", err)
 	}
@@ -408,7 +447,7 @@ func (m *measurer) runningModels() (map[string]string, error) {
 func (m *measurer) waitHealthy(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := m.client.Get(m.base + "/health")
+		resp, err := m.doGet(m.client, m.base+"/health")
 		if err == nil {
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()

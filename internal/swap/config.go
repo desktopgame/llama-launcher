@@ -22,6 +22,7 @@ type ConfigOption func(*configOptions)
 
 type configOptions struct {
 	perfInterval time.Duration
+	apiKeys      []string
 }
 
 // WithPerfInterval sets how often llama-swap samples system statistics.
@@ -29,6 +30,13 @@ type configOptions struct {
 // llama-swap は 5s 未満を拒否する。
 func WithPerfInterval(d time.Duration) ConfigOption {
 	return func(o *configOptions) { o.perfInterval = d }
+}
+
+// WithAPIKeys sets llama-swap's top-level apiKeys, requiring every proxied
+// request (inference and management) to carry one of these as a Bearer token.
+// これはプロファイル単位ではなく全体に一括で効く。空なら認可チェックなし。
+func WithAPIKeys(keys []string) ConfigOption {
+	return func(o *configOptions) { o.apiKeys = keys }
 }
 
 // GenerateConfig builds a llama-swap config.yaml from a workspace and its profiles.
@@ -56,6 +64,12 @@ func GenerateConfig(
 	// 既定の5秒サンプリングは cost 計測には粗すぎるので、必要なら短くする
 	if cfgOpts.perfInterval > 0 {
 		fmt.Fprintf(&b, "performance:\n  every: %s\n", cfgOpts.perfInterval)
+	}
+	if len(cfgOpts.apiKeys) > 0 {
+		b.WriteString("apiKeys:\n")
+		for _, k := range cfgOpts.apiKeys {
+			fmt.Fprintf(&b, "  - \"%s\"\n", strings.ReplaceAll(k, "\"", "\\\""))
+		}
 	}
 	b.WriteString("\n")
 
