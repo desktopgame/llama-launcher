@@ -77,6 +77,9 @@ type Model struct {
 	classifiedMap   map[string]runtime.AssetInfo
 	// runtime: installed
 	installed list.Model
+	// pendingRuntimeApply holds the runtime dir name awaiting a second 'a'
+	// press to confirm "apply this runtime to every profile" (destructive).
+	pendingRuntimeApply string
 	// model: search
 	searchInput textinput.Model
 	// model: search results
@@ -168,6 +171,12 @@ type installedRuntimesMsg struct {
 	runtimes []runtime.InstalledRuntime
 	err      error
 }
+type runtimeAppliedMsg struct {
+	dirName string
+	changed int
+	total   int
+	err     error
+}
 type modelSearchMsg struct {
 	models []model.HFModel
 	err    error
@@ -207,6 +216,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// any key other than "a" cancels a pending runtime-apply confirmation
+		if m.current == viewInstalledRuntimes && msg.String() != "a" {
+			m.pendingRuntimeApply = ""
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -214,6 +227,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleBack()
 		case "enter":
 			return m.handleEnter()
+		case "a":
+			if m.current == viewInstalledRuntimes {
+				return m.handleApplyRuntimeToAllProfiles()
+			}
 		case "left":
 			if m.current == viewLocalModels && len(m.localTabs) > 0 {
 				m.localTabIdx = (m.localTabIdx - 1 + len(m.localTabs)) % len(m.localTabs)
@@ -257,6 +274,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleRuntimeDownloadMsg(msg)
 	case installedRuntimesMsg:
 		return m.handleInstalledRuntimesMsg(msg)
+	case runtimeAppliedMsg:
+		return m.handleRuntimeAppliedMsg(msg)
 
 	// profile messages
 	case profilesMsg:
@@ -527,6 +546,29 @@ func (m Model) handleInstalledEnter() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleApplyRuntimeToAllProfiles overwrites every saved profile's runtime
+// with the one selected in the installed-runtimes list. Since this touches
+// every profile at once, it requires pressing "a" twice on the same item.
+func (m Model) handleApplyRuntimeToAllProfiles() (tea.Model, tea.Cmd) {
+	i, ok := m.installed.SelectedItem().(menuItem)
+	if !ok {
+		return m, nil
+	}
+	dirName := i.title
+
+	if m.pendingRuntimeApply != dirName {
+		m.pendingRuntimeApply = dirName
+		m.statusError = false
+		m.status = fmt.Sprintf("Press 'a' again to overwrite ALL profiles to use runtime %q", dirName)
+		return m, nil
+	}
+
+	m.pendingRuntimeApply = ""
+	m.current = viewLoading
+	m.status = fmt.Sprintf("Applying runtime %q to all profiles...", dirName)
+	return m, tea.Batch(m.spinner.Tick, applyRuntimeToAllProfilesCmd(m.profManager, dirName))
+}
+
 // --- Model search ---
 
 func (m Model) updateModelSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -643,6 +685,8 @@ func (m Model) handleInstalledRuntimesMsg(msg installedRuntimesMsg) (tea.Model, 
 		m.current = viewMenu
 		return m, nil
 	}
+	m.status = ""
+	m.statusError = false
 	items := make([]list.Item, len(msg.runtimes))
 	for i, r := range msg.runtimes {
 		items[i] = menuItem{
@@ -651,8 +695,23 @@ func (m Model) handleInstalledRuntimesMsg(msg installedRuntimesMsg) (tea.Model, 
 		}
 	}
 	m.installed = list.New(items, list.NewDefaultDelegate(), m.width, m.height-2)
-	m.installed.Title = "Installed Runtimes (enter to delete, q to back)"
+	m.installed.Title = "Installed Runtimes (enter to delete, a to apply to all profiles, q to back)"
 	m.current = viewInstalledRuntimes
+	return m, nil
+}
+
+func (m Model) handleRuntimeAppliedMsg(msg runtimeAppliedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.statusError = true
+		m.status = fmt.Sprintf("Failed to apply runtime: %v", msg.err)
+	} else if msg.total == 0 {
+		m.statusError = false
+		m.status = "No profiles found to update"
+	} else {
+		m.statusError = false
+		m.status = fmt.Sprintf("Applied runtime %q to %d profile(s) (%d already used it)", msg.dirName, msg.changed, msg.total-msg.changed)
+	}
+	m.current = viewMenu
 	return m, nil
 }
 
@@ -784,6 +843,15 @@ func (m Model) View() string {
 		b.WriteString(m.backends.View())
 	case viewInstalledRuntimes:
 		b.WriteString(m.installed.View())
+		if m.status != "" {
+			style := lipgloss.NewStyle().MarginLeft(2)
+			if m.statusError {
+				style = style.Foreground(lipgloss.Color("196")) // red
+			} else {
+				style = style.Foreground(lipgloss.Color("205")) // pink (pending confirmation / info)
+			}
+			b.WriteString("\n" + style.Render(m.status))
+		}
 	case viewModelSearch:
 		b.WriteString(fmt.Sprintf("\n  Search GGUF Models\n\n  %s\n\n  Press Enter to search, Esc to cancel\n", m.searchInput.View()))
 	case viewModelResults:
@@ -951,6 +1019,13 @@ func listInstalledCmd(mgr *runtime.Manager) tea.Cmd {
 	return func() tea.Msg {
 		runtimes, err := mgr.List()
 		return installedRuntimesMsg{runtimes: runtimes, err: err}
+	}
+}
+
+func applyRuntimeToAllProfilesCmd(mgr *profile.Manager, dirName string) tea.Cmd {
+	return func() tea.Msg {
+		changed, total, err := mgr.SetRuntimeForAll(dirName)
+		return runtimeAppliedMsg{dirName: dirName, changed: changed, total: total, err: err}
 	}
 }
 

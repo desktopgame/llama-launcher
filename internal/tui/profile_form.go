@@ -26,8 +26,8 @@ type profileFormValues struct {
 	contextSize            string
 	gpuLayers              string
 	flashAttn              bool
-	noMmap                 bool
-	jinja                  bool
+	loadMode               string
+	jinja                  string
 	reasoningBudget        string
 	reasoningBudgetMessage string
 	mmprojPath             string
@@ -103,12 +103,18 @@ func newProfileFormState(
 		if editing.ContextSize > 0 {
 			vals.contextSize = strconv.Itoa(editing.ContextSize)
 		}
-		if editing.GPULayers > 0 {
-			vals.gpuLayers = strconv.Itoa(editing.GPULayers)
+		if editing.GPULayers != nil {
+			vals.gpuLayers = strconv.Itoa(*editing.GPULayers)
 		}
 		vals.flashAttn = editing.FlashAttention
-		vals.noMmap = editing.NoMmap
-		vals.jinja = editing.Jinja
+		vals.loadMode = string(editing.LoadMode)
+		if editing.Jinja != nil {
+			if *editing.Jinja {
+				vals.jinja = "on"
+			} else {
+				vals.jinja = "off"
+			}
+		}
 		if editing.ReasoningBudget != nil {
 			vals.reasoningBudget = strconv.Itoa(*editing.ReasoningBudget)
 		}
@@ -224,8 +230,13 @@ func (pf *profileFormState) buildMainForm() {
 			huh.NewConfirm().
 				Title("Flash Attention").
 				Value(&vals.flashAttn),
-			huh.NewConfirm().
-				Title("Jinja Templates").
+			huh.NewSelect[string]().
+				Title("Jinja Templates (default = enabled)").
+				Options(
+					huh.NewOption("Default (enabled)", ""),
+					huh.NewOption("On", "on"),
+					huh.NewOption("Off", "off"),
+				).
 				Value(&vals.jinja),
 			huh.NewInput().
 				Title("Reasoning Budget (empty = default(-1), 0 = thinking off)").
@@ -237,9 +248,17 @@ func (pf *profileFormState) buildMainForm() {
 		)
 	}
 	group2Fields = append(group2Fields,
-		huh.NewConfirm().
-			Title("Disable mmap").
-			Value(&vals.noMmap),
+		huh.NewSelect[string]().
+			Title("Load Mode (default = auto)").
+			Options(
+				huh.NewOption("Default (auto)", ""),
+				huh.NewOption("none (disable mmap)", string(profile.LoadModeNone)),
+				huh.NewOption("mmap", string(profile.LoadModeMmap)),
+				huh.NewOption("mlock", string(profile.LoadModeMlock)),
+				huh.NewOption("mmap+mlock", string(profile.LoadModeMmapMlock)),
+				huh.NewOption("dio (Direct I/O)", string(profile.LoadModeDio)),
+			).
+			Value(&vals.loadMode),
 		huh.NewInput().
 			Title("Cost in MB (empty = use the measured value)").
 			Value(&vals.cost).
@@ -281,11 +300,21 @@ func optionalInt(s string) *int {
 func (pf *profileFormState) toProfile() *profile.Profile {
 	v := pf.vals
 	ctxSize, _ := strconv.Atoi(v.contextSize)
-	gpuLayers, _ := strconv.Atoi(v.gpuLayers)
 
-	// 空欄(未設定)と 0(思考を即終了)は意味が違うのでポインタで区別する
+	// 空欄(未設定)と 0(GPUオフロードなし/思考を即終了)は意味が違うのでポインタで区別する
+	gpuLayers := optionalInt(v.gpuLayers)
 	reasoningBudget := optionalInt(v.reasoningBudget)
 	cost := optionalInt(v.cost)
+
+	var jinja *bool
+	switch v.jinja {
+	case "on":
+		b := true
+		jinja = &b
+	case "off":
+		b := false
+		jinja = &b
+	}
 
 	var env map[string]string
 	for line := range strings.SplitSeq(v.env, "\n") {
@@ -311,8 +340,8 @@ func (pf *profileFormState) toProfile() *profile.Profile {
 		ContextSize:            ctxSize,
 		GPULayers:              gpuLayers,
 		FlashAttention:         v.flashAttn,
-		NoMmap:                 v.noMmap,
-		Jinja:                  v.jinja,
+		LoadMode:               profile.LoadMode(v.loadMode),
+		Jinja:                  jinja,
 		ReasoningBudget:        reasoningBudget,
 		ReasoningBudgetMessage: v.reasoningBudgetMessage,
 		MMProjPath:             v.mmprojPath,
@@ -448,8 +477,8 @@ func (m Model) viewProfileDetail() string {
 	if p.ContextSize > 0 {
 		line("Context", strconv.Itoa(p.ContextSize))
 	}
-	if p.GPULayers > 0 {
-		line("GPU Layers", strconv.Itoa(p.GPULayers))
+	if p.GPULayers != nil {
+		line("GPU Layers", strconv.Itoa(*p.GPULayers))
 	}
 	if p.ModelType != profile.ModelTypeEmbedding {
 		if p.FlashAttention {
@@ -458,8 +487,12 @@ func (m Model) viewProfileDetail() string {
 			line("Flash Attn", "no")
 		}
 	}
-	if p.Jinja {
-		line("Jinja", "yes")
+	if p.Jinja != nil {
+		if *p.Jinja {
+			line("Jinja", "on")
+		} else {
+			line("Jinja", "off")
+		}
 	}
 	if p.ReasoningBudget != nil {
 		line("Reasoning Budget", strconv.Itoa(*p.ReasoningBudget))
@@ -467,8 +500,8 @@ func (m Model) viewProfileDetail() string {
 	if p.ReasoningBudgetMessage != "" {
 		line("Reasoning Budget/Msg", p.ReasoningBudgetMessage)
 	}
-	if p.NoMmap {
-		line("mmap", "disabled")
+	if p.LoadMode != "" {
+		line("Load Mode", string(p.LoadMode))
 	}
 	if p.MMProjPath != "" {
 		line("mmproj", filepath.Base(p.MMProjPath))

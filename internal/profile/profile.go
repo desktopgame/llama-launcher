@@ -17,17 +17,38 @@ const (
 	ModelTypeEmbedding  ModelType = "embedding"
 )
 
+// LoadMode is llama-server's model loading strategy, passed via --load-mode.
+// This replaces the now-deprecated --mmap/--no-mmap/--mlock/--direct-io flags,
+// which a single bool can no longer represent (mmap+mlock has no bool equivalent).
+type LoadMode string
+
+const (
+	LoadModeNone      LoadMode = "none"  // 旧 --no-mmap 相当
+	LoadModeMmap      LoadMode = "mmap"  // 旧 --mmap 相当
+	LoadModeMlock     LoadMode = "mlock" // 旧 --mlock 相当
+	LoadModeMmapMlock LoadMode = "mmap+mlock"
+	LoadModeDio       LoadMode = "dio" // 旧 --direct-io/--dio 相当
+)
+
 // Profile represents a combination of model + runtime + launch parameters.
 type Profile struct {
-	Name                   string            `json:"name"`
-	ModelPath              string            `json:"model_path"`
-	RuntimeDirName         string            `json:"runtime_dir_name"`
-	ModelType              ModelType         `json:"model_type"`
-	ContextSize            int               `json:"context_size,omitempty"`
-	GPULayers              int               `json:"gpu_layers,omitempty"`
-	FlashAttention         bool              `json:"flash_attention,omitempty"`
-	NoMmap                 bool              `json:"no_mmap,omitempty"`
-	Jinja                  bool              `json:"jinja,omitempty"`
+	Name           string    `json:"name"`
+	ModelPath      string    `json:"model_path"`
+	RuntimeDirName string    `json:"runtime_dir_name"`
+	ModelType      ModelType `json:"model_type"`
+	ContextSize    int       `json:"context_size,omitempty"`
+	// GPULayers は *int で保持する。llama-server の -ngl は現在デフォルトが
+	// "auto"(GPUオフロードを試みる) であり、意図的な 0(CPU限定)と未設定を
+	// 区別できないと、CPU限定のつもりが黙ってGPUを使ってしまう。
+	GPULayers      *int `json:"gpu_layers,omitempty"`
+	FlashAttention bool `json:"flash_attention,omitempty"`
+	// LoadMode は未設定(空文字)なら --load-mode を渡さず、llama-server の
+	// デフォルト(auto)に委ねる。
+	LoadMode LoadMode `json:"load_mode,omitempty"`
+	// Jinja は *bool で保持する。llama-server の --jinja は現在デフォルトで
+	// 有効なので、「オフにしたい」という意図を表すには明示的に --no-jinja を
+	// 渡す必要がある。nil = 未設定(デフォルトの有効に従う)。
+	Jinja                  *bool             `json:"jinja,omitempty"`
 	ReasoningBudget        *int              `json:"reasoning_budget,omitempty"` // nil = 未設定, 0 = 思考を即終了, -1 = 無制限
 	ReasoningBudgetMessage string            `json:"reasoning_budget_message,omitempty"`
 	MMProjPath             string            `json:"mmproj_path,omitempty"`
@@ -79,8 +100,10 @@ func (p *Profile) BuildArgs(port int) []string {
 	if p.ContextSize > 0 {
 		args = append(args, "-c", fmt.Sprintf("%d", p.ContextSize))
 	}
-	if p.GPULayers > 0 {
-		args = append(args, "-ngl", fmt.Sprintf("%d", p.GPULayers))
+	// nil = 未設定。0 は「GPUオフロードなし」という有効な値であり、
+	// 省略すると llama-server のデフォルト(auto = GPUオフロードを試みる)になってしまう。
+	if p.GPULayers != nil {
+		args = append(args, "-ngl", fmt.Sprintf("%d", *p.GPULayers))
 	}
 	if p.FlashAttention && p.ModelType != ModelTypeEmbedding {
 		args = append(args, "-fa", "on")
@@ -88,11 +111,17 @@ func (p *Profile) BuildArgs(port int) []string {
 	if p.ModelType == ModelTypeEmbedding {
 		args = append(args, "--embedding")
 	}
-	if p.NoMmap {
-		args = append(args, "--no-mmap")
+	if p.LoadMode != "" {
+		args = append(args, "--load-mode", string(p.LoadMode))
 	}
-	if p.Jinja {
-		args = append(args, "--jinja")
+	// nil = 未設定(デフォルトの有効に従う)。false は明示的な無効化であり、
+	// 省略するとデフォルト有効のままになって意図と逆転するため --no-jinja を渡す。
+	if p.Jinja != nil {
+		if *p.Jinja {
+			args = append(args, "--jinja")
+		} else {
+			args = append(args, "--no-jinja")
+		}
 	}
 	// 0 は「思考を即終了」という有効な値なので、未設定(nil)と区別する
 	if p.ReasoningBudget != nil {
@@ -205,4 +234,27 @@ func (m *Manager) List() ([]*Profile, error) {
 func (m *Manager) Remove(name string) error {
 	path := filepath.Join(m.dir, name+".json")
 	return os.Remove(path)
+}
+
+// SetRuntimeForAll overwrites every saved profile's RuntimeDirName with
+// dirName and persists the change. It returns how many profiles were
+// actually changed and how many profiles exist in total (profiles already
+// pointing at dirName are left untouched but still counted in total).
+func (m *Manager) SetRuntimeForAll(dirName string) (changed, total int, err error) {
+	profiles, err := m.List()
+	if err != nil {
+		return 0, 0, err
+	}
+	total = len(profiles)
+	for _, p := range profiles {
+		if p.RuntimeDirName == dirName {
+			continue
+		}
+		p.RuntimeDirName = dirName
+		if err := m.Save(p); err != nil {
+			return changed, total, err
+		}
+		changed++
+	}
+	return changed, total, nil
 }
