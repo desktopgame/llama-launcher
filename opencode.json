@@ -40,6 +40,6 @@
     "external_directory": {
       "~/AppData/Roaming/llama-launcher": "allow"
     },
-    "webfetch": "ask"
+    "webfetch": "allow"
   }
 }
