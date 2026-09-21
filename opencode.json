@@ -37,7 +37,9 @@
 
       "cd C:\\Users\\dansaka\\Work\\VPS": "deny",
     },
-    "external_directory": "deny",
+    "external_directory": {
+      "~/AppData/Roaming/llama-launcher": "allow"
+    },
     "webfetch": "ask"
   }
 }
