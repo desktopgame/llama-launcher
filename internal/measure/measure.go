@@ -288,8 +288,15 @@ func (m *measurer) load(name string) error {
 	if err != nil {
 		return fmt.Errorf("load request failed: %w", err)
 	}
-	io.Copy(io.Discard, resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	resp.Body.Close()
+	// llama-swap answers 5xx when the upstream command exits before it becomes
+	// healthy (a runtime that cannot load the model, a missing binary, ...).
+	// Polling for "ready" would then burn the whole LoadTimeout on a model that
+	// will never start, which reads as a hang.
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("load failed (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 
 	deadline := time.Now().Add(m.opts.LoadTimeout)
 	for time.Now().Before(deadline) {

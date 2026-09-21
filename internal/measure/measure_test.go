@@ -1,10 +1,41 @@
 package measure
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/desktopgame/llama-launcher/internal/workspace"
 )
+
+// ロード要求が失敗を返したら、ready を待たずに即座に諦めること。
+// そうしないと、起動しないモデルに対して LoadTimeout いっぱい待ち続ける。
+func TestLoadFailsFastOnUpstreamError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "upstream command exited prematurely", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	m := &measurer{
+		base:   srv.URL,
+		client: srv.Client(),
+		opts:   Options{LoadTimeout: 10 * time.Minute},
+	}
+
+	start := time.Now()
+	err := m.load("broken")
+	if err == nil {
+		t.Fatal("expected an error when the upstream fails")
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Errorf("error = %v, want it to mention HTTP 500", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("load took %s; it should return as soon as the upstream fails", elapsed)
+	}
+}
 
 func TestParseMemoryUsedMB(t *testing.T) {
 	// 実際の /metrics 出力から抜粋したもの
