@@ -1,0 +1,43 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "read": {
+      "*": "allow",
+      ".env": "deny",
+      ".env.*": "deny",
+      "**/.env": "deny",
+      "**/.env.*": "deny"
+    },
+    "edit": {
+      "*": "allow",
+      "opencode.json": "deny",
+      "opencode.jsonc": "deny",
+      ".opencode/opencode.json": "deny",
+      ".opencode/opencode.jsonc": "deny",
+      ".claude/settings.json": "deny",
+      ".claude/settings.local.json": "deny",
+      "**/.claude/settings.json": "deny",
+      "**/.claude/settings.local.json": "deny"
+    },
+    "bash": {
+      "*": "allow",
+      "mkdir -p *": "allow",
+      "uv format *": "allow",
+      "uvx ruff *": "allow",
+      "git status": "allow",
+      "git diff *": "allow",
+      "git log -n *": "allow",
+      "git add *": "allow",
+      "git commit *": "allow",
+      "git push *": "ask",
+      "git pull *": "ask",
+      "uv run *": "ask",
+      "python *": "ask",
+      "python3 *": "ask",
+
+      "cd C:\\Users\\dansaka\\Work\\VPS": "deny",
+    },
+    "external_directory": "deny",
+    "webfetch": "ask"
+  }
+}
